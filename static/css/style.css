@@ -30,10 +30,84 @@ body {
     min-height: 100vh;
 }
 
+.app-shell {
+    min-height: 100vh;
+    background-color: var(--bg-primary);
+    display: flex;
+    flex-direction: column;
+}
+
+.top-nav {
+    height: 56px;
+    background-color: #141414;
+    border-bottom: 1px solid #242424;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 40px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.brand-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    background: var(--accent-blue);
+}
+
+.brand-text {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.nav-tabs {
+    display: flex;
+    gap: 24px;
+    font-size: 0.85rem;
+}
+
+.nav-tab {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: 6px 0;
+    cursor: pointer;
+}
+
+.nav-tab-active {
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--accent-blue);
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    padding: 32px 0 40px;
+}
+
 .container {
+    width: 100%;
     max-width: 900px;
     margin: 0 auto;
-    padding: 3rem 2rem;
+    padding: 0 40px 48px;
+}
+
+.footer {
+    border-top: 1px solid #242424;
+    background-color: #141414;
+    padding: 12px 0 10px;
+    text-align: center;
+}
+
+.footer-text {
+    color: var(--text-muted);
+    font-size: 0.8rem;
 }
 
 .header {
