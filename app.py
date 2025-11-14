@@ -2,7 +2,7 @@
 Universal Email Validator Flask Application
 Production-grade email validation API with file upload support
 """
-from flask import Flask, request, jsonify, render_template, redirect
+from flask import Flask, request, jsonify, render_template, redirect, session
 from werkzeug.utils import secure_filename
 import os
 from typing import Dict, Any, List
@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import urllib.request
 import urllib.error
 from uuid import uuid4
+from datetime import timedelta
 
 # Optional: Flasgger for interactive API documentation
 try:
@@ -34,9 +35,17 @@ from modules.email_tracker import get_tracker
 from modules.api_auth import require_api_key, get_key_manager
 from modules.crm_adapter import parse_crm_request, build_crm_response, get_crm_event_type, validate_crm_vendor
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
+from modules.admin_auth import (
+    authenticate_admin, create_admin_session, destroy_admin_session,
+    is_admin_logged_in, require_admin_login, require_admin_api,
+    change_admin_password
+)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+app.config['START_TIME'] = time.time()
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'csv', 'xls', 'xlsx', 'pdf'}
 
@@ -258,9 +267,302 @@ def index():
 
 
 @app.route('/admin')
+@require_admin_login
 def admin_dashboard():
     """Render admin dashboard"""
     return render_template('admin/dashboard.html')
+
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """Admin login page and handler"""
+    if request.method == 'GET':
+        # If already logged in, redirect to dashboard
+        if is_admin_logged_in():
+            return redirect('/admin')
+        return render_template('admin/login.html')
+
+    # POST - handle login
+    try:
+        data = request.get_json()
+        username = data.get('username', '')
+        password = data.get('password', '')
+
+        if authenticate_admin(username, password):
+            create_admin_session(username)
+            next_url = request.args.get('next', '/admin')
+            return jsonify({"success": True, "redirect": next_url})
+        else:
+            return jsonify({"success": False, "error": "Invalid username or password"}), 401
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/logout')
+def admin_logout():
+    """Admin logout"""
+    destroy_admin_session()
+    return redirect('/admin/login')
+
+
+@app.route('/admin/api-keys')
+@require_admin_login
+def admin_api_keys():
+    """Render API keys management page"""
+    return render_template('admin/api_keys.html')
+
+
+@app.route('/admin/api/keys', methods=['GET'])
+@require_admin_api
+def get_api_keys():
+    """Get all API keys"""
+    try:
+        key_manager = get_key_manager()
+        keys = key_manager.list_keys()
+        return jsonify({"success": True, "keys": keys})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/keys', methods=['POST'])
+@require_admin_api
+def create_api_key():
+    """Create new API key"""
+    try:
+        data = request.get_json()
+        name = data.get('name', '')
+        description = data.get('description', '')
+
+        if not name:
+            return jsonify({"success": False, "error": "Key name is required"}), 400
+
+        key_manager = get_key_manager()
+        api_key = key_manager.create_key(name, description)
+
+        return jsonify({"success": True, "api_key": api_key})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/keys/<api_key>', methods=['DELETE'])
+@require_admin_api
+def revoke_api_key(api_key):
+    """Revoke an API key"""
+    try:
+        key_manager = get_key_manager()
+        success = key_manager.revoke_key(api_key)
+
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Key not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/emails')
+@require_admin_login
+def admin_emails():
+    """Render email database explorer page"""
+    return render_template('admin/emails.html')
+
+
+@app.route('/admin/api/emails', methods=['GET'])
+@require_admin_api
+def get_emails():
+    """Get all emails from database"""
+    try:
+        tracker = get_tracker()
+        emails_data = []
+
+        for email, data in tracker.data.get('emails', {}).items():
+            emails_data.append({
+                'email': email,
+                'status': 'valid' if data.get('valid', False) else 'invalid',
+                'type': data.get('type', 'unknown'),
+                'domain': email.split('@')[1] if '@' in email else '',
+                'first_seen': data.get('first_seen', ''),
+                'last_validated': data.get('last_validated', ''),
+                'validation_count': data.get('validation_count', 0)
+            })
+
+        return jsonify({"success": True, "emails": emails_data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/settings')
+@require_admin_login
+def admin_settings():
+    """Render settings page"""
+    return render_template('admin/settings.html')
+
+
+@app.route('/admin/api/change-password', methods=['POST'])
+@require_admin_api
+def change_password():
+    """Change admin password"""
+    try:
+        data = request.get_json()
+        old_password = data.get('old_password', '')
+        new_password = data.get('new_password', '')
+
+        if change_admin_password(old_password, new_password):
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Invalid current password"}), 401
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/system-info', methods=['GET'])
+@require_admin_api
+def get_system_info():
+    """Get system information"""
+    import sys
+    import flask
+    try:
+        uptime_seconds = time.time() - app.config.get('START_TIME', time.time())
+        uptime_str = f"{int(uptime_seconds // 3600)}h {int((uptime_seconds % 3600) // 60)}m"
+
+        return jsonify({
+            "success": True,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "flask_version": flask.__version__,
+            "uptime": uptime_str
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/database-stats', methods=['GET'])
+@require_admin_api
+def get_database_stats():
+    """Get database statistics"""
+    try:
+        tracker = get_tracker()
+        stats = tracker.get_stats()
+
+        # Calculate database size
+        import os
+        db_file = os.path.join(os.path.dirname(__file__), 'data', 'email_history.json')
+        db_size = os.path.getsize(db_file) if os.path.exists(db_file) else 0
+        db_size_str = f"{db_size / 1024:.2f} KB" if db_size < 1024*1024 else f"{db_size / (1024*1024):.2f} MB"
+
+        return jsonify({
+            "success": True,
+            "total_emails": stats.get('total_unique_emails', 0),
+            "total_sessions": stats.get('total_upload_sessions', 0),
+            "database_size": db_size_str
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/config', methods=['POST'])
+@require_admin_api
+def save_config():
+    """Save application configuration"""
+    try:
+        data = request.get_json()
+        # In a real app, save to config file
+        # For now, just return success
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/export-database', methods=['GET'])
+@require_admin_api
+def export_database():
+    """Export database as JSON"""
+    try:
+        tracker = get_tracker()
+        return jsonify(tracker.data)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/clear-database', methods=['POST'])
+@require_admin_api
+def clear_database():
+    """Clear all database data"""
+    try:
+        tracker = get_tracker()
+        tracker.data = {
+            "emails": {},
+            "sessions": [],
+            "stats": {
+                "total_unique_emails": 0,
+                "total_upload_sessions": 0,
+                "total_duplicates_prevented": 0
+            }
+        }
+        tracker.save()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/analytics')
+@require_admin_login
+def admin_analytics():
+    """Render analytics page"""
+    return render_template('admin/analytics.html')
+
+
+@app.route('/admin/logs')
+@require_admin_login
+def admin_logs():
+    """Render logs page"""
+    return render_template('admin/logs.html')
+
+
+@app.route('/admin/webhooks')
+@require_admin_login
+def admin_webhooks():
+    """Render webhooks page"""
+    return render_template('admin/webhooks.html')
+
+
+@app.route('/admin/api/logs', methods=['GET'])
+@require_admin_api
+def get_logs():
+    """Get validation logs"""
+    try:
+        # In a real app, load from log file or database
+        # For now, return sample data from tracker sessions
+        tracker = get_tracker()
+        logs = []
+
+        for session in tracker.data.get('sessions', [])[:100]:  # Last 100 sessions
+            logs.append({
+                'timestamp': session.get('timestamp', ''),
+                'type': session.get('type', 'bulk'),
+                'email': session.get('filename', ''),
+                'filename': session.get('filename', ''),
+                'status': 'success',
+                'result': f"{session.get('emails_found', 0)} emails found",
+                'duration': session.get('duration', 0),
+                'ip': session.get('ip', 'N/A')
+            })
+
+        return jsonify({"success": True, "logs": logs})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/webhook-logs', methods=['GET'])
+@require_admin_api
+def get_webhook_logs():
+    """Get webhook logs"""
+    try:
+        # In a real app, load from webhook log file
+        # For now, return sample data
+        logs = []
+        return jsonify({"success": True, "logs": logs})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/health', methods=['GET'])
@@ -1283,9 +1585,23 @@ def get_analytics_data():
     except:
         active_keys = 0
 
+    # Add email types for analytics page
+    email_types = {
+        "personal": sum(1 for e in emails_data.values() if e.get('type') == 'personal'),
+        "business": sum(1 for e in emails_data.values() if e.get('type') == 'business'),
+        "role": sum(1 for e in emails_data.values() if e.get('type') == 'role'),
+        "disposable": sum(1 for e in emails_data.values() if e.get('type') == 'disposable')
+    }
+
+    # Add additional KPIs for analytics page
+    kpis["total_validations"] = stats.get("total_upload_sessions", 0)
+    kpis["api_requests"] = stats.get("total_upload_sessions", 0)
+    kpis["avg_response_time"] = 150  # Placeholder
+
     return jsonify({
         "kpis": kpis,
         "email_type_distribution": email_type_dist,
+        "email_types": email_types,
         "validation_trends": validation_trends,
         "top_domains": top_domains,
         "domain_reputation": domain_reputation,

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Database - Email Validator Admin</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/api-keys">API Keys</a>
+            <a href="/admin/emails" class="active">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/logs">Logs</a>
+            <a href="/admin/webhooks">Webhooks</a>
+            <a href="/admin/settings">Settings</a>
+            <a href="/">Back to App</a>
+            <a href="/admin/logout" class="logout-btn">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>Email Database Explorer</h1>
+        
+        <div class="filter-bar">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search emails..." onkeyup="filterEmails()">
+            </div>
+            <div class="filter-controls">
+                <select id="status-filter" onchange="filterEmails()">
+                    <option value="">All Status</option>
+                    <option value="valid">Valid</option>
+                    <option value="invalid">Invalid</option>
+                </select>
+                <select id="type-filter" onchange="filterEmails()">
+                    <option value="">All Types</option>
+                    <option value="personal">Personal</option>
+                    <option value="business">Business</option>
+                    <option value="role">Role-based</option>
+                    <option value="disposable">Disposable</option>
+                </select>
+                <button class="btn-primary" onclick="exportEmails()">Export CSV</button>
+            </div>
+        </div>
+        
+        <div class="stats-bar">
+            <span>Total: <strong id="total-count">0</strong></span>
+            <span>Valid: <strong id="valid-count">0</strong></span>
+            <span>Invalid: <strong id="invalid-count">0</strong></span>
+            <span>Showing: <strong id="showing-count">0</strong></span>
+        </div>
+        
+        <div class="emails-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Type</th>
+                        <th>Domain</th>
+                        <th>First Seen</th>
+                        <th>Last Validated</th>
+                        <th>Validation Count</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="emails-tbody">
+                    <tr>
+                        <td colspan="8" style="text-align: center;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="pagination">
+            <button id="prev-btn" onclick="prevPage()" disabled>Previous</button>
+            <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+            <button id="next-btn" onclick="nextPage()" disabled>Next</button>
+        </div>
+    </div>
+    
+    <!-- Email Details Modal -->
+    <div id="email-details-modal" class="modal">
+        <div class="modal-content" style="max-width: 700px;">
+            <h2>Email Details</h2>
+            <div id="email-details-content"></div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideEmailDetails()">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/emails.js"></script>
+</body>
+</html>
+

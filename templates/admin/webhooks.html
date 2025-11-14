@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webhook Testing - Email Validator Admin</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/api-keys">API Keys</a>
+            <a href="/admin/emails">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/logs">Logs</a>
+            <a href="/admin/webhooks" class="active">Webhooks</a>
+            <a href="/admin/settings">Settings</a>
+            <a href="/">Back to App</a>
+            <a href="/admin/logout" class="logout-btn">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>Webhook Testing & Logs</h1>
+        
+        <div class="webhook-tester">
+            <h2>Test Webhook</h2>
+            <form id="webhook-test-form">
+                <div class="form-group">
+                    <label for="webhook-url">Webhook URL</label>
+                    <input type="text" id="webhook-url" value="/api/webhook/validate" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="webhook-payload">Payload (JSON)</label>
+                    <textarea id="webhook-payload" rows="10">{
+  "email": "test@example.com"
+}</textarea>
+                </div>
+                <div class="form-group">
+                    <label for="api-key">API Key</label>
+                    <input type="text" id="api-key" placeholder="Enter your API key">
+                </div>
+                <button type="submit" class="btn-primary">Send Test Request</button>
+            </form>
+            
+            <div id="webhook-response" class="webhook-response" style="display: none;">
+                <h3>Response</h3>
+                <div class="response-status">
+                    <span>Status: <strong id="response-status">-</strong></span>
+                    <span>Time: <strong id="response-time">-</strong></span>
+                </div>
+                <pre id="response-body"></pre>
+            </div>
+        </div>
+        
+        <div class="webhook-logs">
+            <h2>Recent Webhook Calls</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Endpoint</th>
+                        <th>Status</th>
+                        <th>Emails Processed</th>
+                        <th>Response Time</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="webhook-logs-tbody">
+                    <tr>
+                        <td colspan="6" style="text-align: center;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Webhook Log Details Modal -->
+    <div id="webhook-details-modal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <h2>Webhook Call Details</h2>
+            <div id="webhook-details-content"></div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideWebhookDetails()">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/webhooks.js"></script>
+</body>
+</html>
+

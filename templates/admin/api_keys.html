@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Keys - Email Validator Admin</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/api-keys" class="active">API Keys</a>
+            <a href="/admin/emails">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/logs">Logs</a>
+            <a href="/admin/webhooks">Webhooks</a>
+            <a href="/admin/settings">Settings</a>
+            <a href="/">Back to App</a>
+            <a href="/admin/logout" class="logout-btn">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>API Key Management</h1>
+        
+        <div class="action-bar">
+            <button class="btn-primary" onclick="showCreateKeyModal()">+ Create New API Key</button>
+        </div>
+        
+        <div class="api-keys-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Key Name</th>
+                        <th>API Key</th>
+                        <th>Created</th>
+                        <th>Last Used</th>
+                        <th>Requests</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="api-keys-tbody">
+                    <tr>
+                        <td colspan="7" style="text-align: center;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Create Key Modal -->
+    <div id="create-key-modal" class="modal">
+        <div class="modal-content">
+            <h2>Create New API Key</h2>
+            <form id="create-key-form">
+                <div class="form-group">
+                    <label for="key-name">Key Name</label>
+                    <input type="text" id="key-name" required placeholder="e.g., Production API">
+                </div>
+                <div class="form-group">
+                    <label for="key-description">Description (optional)</label>
+                    <textarea id="key-description" rows="3" placeholder="Purpose of this API key"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" onclick="hideCreateKeyModal()">Cancel</button>
+                    <button type="submit" class="btn-primary">Create Key</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Show Key Modal -->
+    <div id="show-key-modal" class="modal">
+        <div class="modal-content">
+            <h2>API Key Created Successfully</h2>
+            <p class="warning-text">⚠️ Copy this key now. You won't be able to see it again!</p>
+            <div class="key-display">
+                <code id="new-api-key"></code>
+                <button class="btn-copy" onclick="copyApiKey()">Copy</button>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-primary" onclick="hideShowKeyModal()">Done</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/api_keys.js"></script>
+</body>
+</html>
+

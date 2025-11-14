@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validation Logs - Email Validator Admin</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/api-keys">API Keys</a>
+            <a href="/admin/emails">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/logs" class="active">Logs</a>
+            <a href="/admin/webhooks">Webhooks</a>
+            <a href="/admin/settings">Settings</a>
+            <a href="/">Back to App</a>
+            <a href="/admin/logout" class="logout-btn">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>Validation Logs</h1>
+        
+        <div class="filter-bar">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search logs..." onkeyup="filterLogs()">
+            </div>
+            <div class="filter-controls">
+                <select id="status-filter" onchange="filterLogs()">
+                    <option value="">All Status</option>
+                    <option value="success">Success</option>
+                    <option value="error">Error</option>
+                </select>
+                <select id="type-filter" onchange="filterLogs()">
+                    <option value="">All Types</option>
+                    <option value="single">Single Validation</option>
+                    <option value="bulk">Bulk Upload</option>
+                    <option value="api">API Request</option>
+                    <option value="webhook">Webhook</option>
+                </select>
+                <button class="btn-primary" onclick="exportLogs()">Export Logs</button>
+            </div>
+        </div>
+        
+        <div class="logs-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Type</th>
+                        <th>Email/File</th>
+                        <th>Status</th>
+                        <th>Result</th>
+                        <th>Duration</th>
+                        <th>IP Address</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-tbody">
+                    <tr>
+                        <td colspan="8" style="text-align: center;">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="pagination">
+            <button id="prev-btn" onclick="prevPage()" disabled>Previous</button>
+            <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+            <button id="next-btn" onclick="nextPage()" disabled>Next</button>
+        </div>
+    </div>
+    
+    <!-- Log Details Modal -->
+    <div id="log-details-modal" class="modal">
+        <div class="modal-content" style="max-width: 700px;">
+            <h2>Log Details</h2>
+            <div id="log-details-content"></div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideLogDetails()">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/logs.js"></script>
+</body>
+</html>
+

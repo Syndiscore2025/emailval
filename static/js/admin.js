@@ -108,38 +108,38 @@ async function loadRecentActivity() {
     try {
         const response = await fetch('/admin/analytics/data');
         const data = await response.json();
-        
+
         const activityList = document.getElementById('activity-list');
         if (!activityList) return;
-        
+
         // Build activity feed from real data
         let html = '';
-        
+
         if (data.kpis.total_validations > 0) {
             html += `<div class="activity-item">
                 <span class="activity-icon">✓</span>
                 <span class="activity-text">${data.kpis.total_validations} total validations performed</span>
             </div>`;
         }
-        
+
         if (data.kpis.duplicates_prevented > 0) {
             html += `<div class="activity-item">
                 <span class="activity-icon">⚠</span>
                 <span class="activity-text">${data.kpis.duplicates_prevented} duplicate emails prevented</span>
             </div>`;
         }
-        
+
         if (data.top_domains.length > 0) {
             html += `<div class="activity-item">
                 <span class="activity-icon">📊</span>
                 <span class="activity-text">Top domain: ${data.top_domains[0].domain} (${data.top_domains[0].count} emails)</span>
             </div>`;
         }
-        
+
         if (html === '') {
             html = '<p>No recent activity</p>';
         }
-        
+
         activityList.innerHTML = html;
     } catch (error) {
         console.error('Error loading activity:', error);
@@ -149,4 +149,22 @@ async function loadRecentActivity() {
         }
     }
 }
+
+// Real-time updates - refresh every 30 seconds
+function startRealTimeUpdates() {
+    // Initial load
+    loadKPIs();
+    loadRecentActivity();
+
+    // Auto-refresh every 30 seconds
+    setInterval(() => {
+        loadKPIs();
+        loadRecentActivity();
+    }, 30000);
+}
+
+// Start real-time updates when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    startRealTimeUpdates();
+});
 

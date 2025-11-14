@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Email Validator Admin</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin">Dashboard</a>
+            <a href="/admin/api-keys">API Keys</a>
+            <a href="/admin/emails">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/logs">Logs</a>
+            <a href="/admin/webhooks">Webhooks</a>
+            <a href="/admin/settings" class="active">Settings</a>
+            <a href="/">Back to App</a>
+            <a href="/admin/logout" class="logout-btn">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>Settings</h1>
+        
+        <div class="settings-grid">
+            <!-- Admin Password -->
+            <div class="settings-card">
+                <h2>Change Admin Password</h2>
+                <form id="password-form">
+                    <div class="form-group">
+                        <label for="old-password">Current Password</label>
+                        <input type="password" id="old-password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-password">New Password</label>
+                        <input type="password" id="new-password" required minlength="8">
+                    </div>
+                    <div class="form-group">
+                        <label for="confirm-password">Confirm New Password</label>
+                        <input type="password" id="confirm-password" required minlength="8">
+                    </div>
+                    <button type="submit" class="btn-primary">Update Password</button>
+                </form>
+            </div>
+            
+            <!-- App Configuration -->
+            <div class="settings-card">
+                <h2>Application Configuration</h2>
+                <form id="config-form">
+                    <div class="form-group">
+                        <label for="smtp-timeout">SMTP Timeout (seconds)</label>
+                        <input type="number" id="smtp-timeout" value="10" min="1" max="60">
+                    </div>
+                    <div class="form-group">
+                        <label for="max-file-size">Max File Size (MB)</label>
+                        <input type="number" id="max-file-size" value="16" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="enable-smtp" checked>
+                            Enable SMTP Validation
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="enable-rate-limit" checked>
+                            Enable API Rate Limiting
+                        </label>
+                    </div>
+                    <button type="submit" class="btn-primary">Save Configuration</button>
+                </form>
+            </div>
+            
+            <!-- Database Management -->
+            <div class="settings-card">
+                <h2>Database Management</h2>
+                <div class="db-stats">
+                    <p>Total Emails: <strong id="db-total-emails">Loading...</strong></p>
+                    <p>Total Sessions: <strong id="db-total-sessions">Loading...</strong></p>
+                    <p>Database Size: <strong id="db-size">Loading...</strong></p>
+                </div>
+                <div class="db-actions">
+                    <button class="btn-secondary" onclick="exportDatabase()">Export Database</button>
+                    <button class="btn-danger" onclick="clearDatabase()">Clear All Data</button>
+                </div>
+            </div>
+            
+            <!-- System Info -->
+            <div class="settings-card">
+                <h2>System Information</h2>
+                <div class="system-info">
+                    <p>Version: <strong>1.0.0</strong></p>
+                    <p>Python: <strong id="python-version">Loading...</strong></p>
+                    <p>Flask: <strong id="flask-version">Loading...</strong></p>
+                    <p>Uptime: <strong id="uptime">Loading...</strong></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/settings.js"></script>
+</body>
+</html>
+
