@@ -39,12 +39,21 @@ Complete **Phases 4, 6, and 7** of the Universal Email Validator project. Phase 
 
 ## 📚 REQUIRED READING (Read These Files First)
 
-### **Critical Documentation**
-1. **`PHASE3_COMPLETE.md`** - Comprehensive overview of what was built in Phases 1-3
-2. **`README.md`** - Project overview
-3. **This file** - Your mission brief
+### **STEP 1: Read Documentation in This Order**
+1. **`NEW_AGENT_BRIEFING.md`** (this file) - Your mission brief and overview
+2. **`PHASE3_COMPLETE.md`** - Comprehensive overview of what was built in Phases 1-3
+3. **`TECHNICAL_SPEC_PHASES_4_6_7.md`** ⚠️ **CRITICAL** - Detailed implementation specs with code examples for YOUR work
+4. **`QUICK_START_GUIDE.md`** - Quick reference for commands and workflows
+5. **`README.md`** - Project overview
 
-### **Critical Code Files to Understand**
+**IMPORTANT**: You MUST read `TECHNICAL_SPEC_PHASES_4_6_7.md` before starting any coding. It contains:
+- Detailed code examples for each phase
+- Expected output schemas
+- Implementation patterns to follow
+- Data structures to use
+- Testing requirements
+
+### **STEP 2: Read Critical Code Files**
 1. **`app.py`** (1102 lines) - Main Flask application, all endpoints
 2. **`modules/file_parser.py`** - Multi-format file parsing (CSV/Excel/PDF) with 3-tier email extraction
 3. **`modules/email_tracker.py`** - Persistent deduplication system (tracks all emails across sessions)
@@ -95,6 +104,8 @@ view test_complete.py
 
 ## 🎯 PHASE 4: Dynamic Column Handling (DO FIRST)
 
+**⚠️ BEFORE STARTING: Read `TECHNICAL_SPEC_PHASES_4_6_7.md` Section "Phase 4" for detailed code examples**
+
 **File to Edit**: `modules/file_parser.py`
 
 ### 4.1 @ Symbol Detection Enhancement ⚠️ HIGHEST PRIORITY
@@ -107,6 +118,8 @@ view test_complete.py
 
 **Current regex**: `r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'`
 
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for complete implementation example with `extract_emails_with_at_symbol()` function**
+
 ### 4.2 Advanced Column Mapping
 - Auto-standardize header variations:
   - "Email", "email_address", "E-mail", "EMAIL" → "email"
@@ -115,17 +128,23 @@ view test_complete.py
 - Add confidence scoring for column detection
 - Log column mapping decisions
 
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for `standardize_column_headers()` implementation**
+
 ### 4.3 Intelligent Row Reconstruction
 - Rebuild row objects dynamically from scattered data
 - Handle merged cells in Excel
 - Handle multi-line cells
 - Preserve additional metadata (name, phone, company, etc.)
 
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for `reconstruct_row_with_metadata()` implementation**
+
 ### 4.4 Normalized Output Format
 - Ensure consistent output across all file types
 - Add source tracking (row/column origin)
 - Add extraction confidence score
 - Add data quality metrics
+
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for complete output schema example**
 
 **Expected Output Schema**:
 ```python
@@ -153,6 +172,8 @@ view test_complete.py
 
 ## 🎯 PHASE 6: Analytics Dashboard & Advanced Features (DO SECOND)
 
+**⚠️ BEFORE STARTING: Read `TECHNICAL_SPEC_PHASES_4_6_7.md` Section "Phase 6" for detailed implementation**
+
 ### 6.1 Analytics Dashboard
 **Files to Create**: `templates/admin/analytics.html`, `static/js/analytics.js`
 
@@ -165,6 +186,8 @@ view test_complete.py
 **Data Source**: `data/email_history.json` - **NO FAKE DATA**
 
 **Charts**: Use Chart.js or ApexCharts
+
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for complete endpoint implementation and response schema**
 
 ### 6.2 Export & Reporting
 **Files to Create**: `modules/reporting.py`
@@ -181,6 +204,8 @@ view test_complete.py
 - `POST /export/pdf`
 - `POST /reports/schedule`
 
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for `generate_pdf_report()` implementation example**
+
 ### 6.3 Advanced Features
 **Requirements**:
 - Real-time validation logs with timestamps
@@ -188,6 +213,8 @@ view test_complete.py
 - Automated retry logic for failed validations
 - Enhanced webhook callback system
 - PDF OCR optimization (image preprocessing, Tesseract)
+
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for `calculate_deliverability_score()` implementation**
 
 ### 6.4 Data Persistence (Optional - Can Defer)
 - PostgreSQL integration (migrate from JSON)
@@ -205,6 +232,8 @@ view test_complete.py
 
 ## 🎯 PHASE 7: Integration & QA (DO THIRD)
 
+**⚠️ BEFORE STARTING: Read `TECHNICAL_SPEC_PHASES_4_6_7.md` Section "Phase 7" for complete HTML/CSS/JS examples**
+
 ### 7.1 Admin Dashboard Integration
 **Files to Create**: `templates/admin/dashboard.html`, `static/css/admin.css`, `static/js/admin.js`
 
@@ -214,6 +243,8 @@ view test_complete.py
    - Charts (validation trends, email type distribution)
    - Real-time activity feed
    - Quick actions
+
+**See `TECHNICAL_SPEC_PHASES_4_6_7.md` for complete HTML template and JavaScript implementation**
 
 2. **API Key Management** (`/admin/api-keys`):
    - List all keys with usage stats
@@ -336,11 +367,13 @@ git push origin main
 ## 🚀 GETTING STARTED
 
 **Step 1**: Read these files in order:
-1. This file (`NEW_AGENT_BRIEFING.md`)
-2. `PHASE3_COMPLETE.md`
-3. `app.py` (skim to understand structure)
-4. `modules/file_parser.py` (read carefully - you'll edit this)
-5. `modules/email_tracker.py` (understand deduplication)
+1. This file (`NEW_AGENT_BRIEFING.md`) - Overview and mission
+2. `PHASE3_COMPLETE.md` - What's already built
+3. **`TECHNICAL_SPEC_PHASES_4_6_7.md`** ⚠️ **CRITICAL - READ BEFORE CODING** - Detailed implementation specs
+4. `QUICK_START_GUIDE.md` - Quick reference
+5. `app.py` (skim to understand structure)
+6. `modules/file_parser.py` (read carefully - you'll edit this)
+7. `modules/email_tracker.py` (understand deduplication)
 
 **Step 2**: Run existing tests to verify everything works:
 ```bash
@@ -349,13 +382,15 @@ python test_webhook_enhanced.py
 python test_crm_integration.py
 ```
 
-**Step 3**: Start with Phase 4.1 (@ symbol detection enhancement in `file_parser.py`)
+**Step 3**: Review `TECHNICAL_SPEC_PHASES_4_6_7.md` Section "Phase 4" for implementation examples
 
-**Step 4**: Write tests as you go (`test_phase4.py`)
+**Step 4**: Start with Phase 4.1 (@ symbol detection enhancement in `file_parser.py`)
 
-**Step 5**: Commit and push when feature is complete
+**Step 5**: Write tests as you go (`test_phase4.py`)
 
-**Step 6**: Move to next sub-phase
+**Step 6**: Commit and push when feature is complete
+
+**Step 7**: Move to next sub-phase
 
 ---
 

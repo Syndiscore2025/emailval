@@ -6,9 +6,15 @@
 ```
 1. NEW_AGENT_BRIEFING.md          (Overview & mission)
 2. PHASE3_COMPLETE.md             (What's already built)
-3. TECHNICAL_SPEC_PHASES_4_6_7.md (Implementation details)
+3. TECHNICAL_SPEC_PHASES_4_6_7.md ⚠️ CRITICAL - READ BEFORE CODING (Implementation details with code examples)
 4. This file                       (Quick reference)
 ```
+
+**⚠️ IMPORTANT**: You MUST read `TECHNICAL_SPEC_PHASES_4_6_7.md` before writing any code. It contains:
+- Complete function implementations for Phase 4, 6, 7
+- Expected output schemas
+- Code patterns to follow
+- Testing requirements
 
 ### 2. Verify Environment
 ```bash
