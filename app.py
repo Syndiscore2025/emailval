@@ -452,15 +452,29 @@ def upload_file():
                 file_content = file.read()
                 parse_result = parse_file(file_content, filename)
 
+                # Extract file type from summary (new format) or fallback to old format
+                summary = parse_result.get("summary", {})
+                file_info_data = summary.get("file_info", {})
+                extraction_stats = summary.get("extraction_stats", {})
+
                 file_info = {
                     "filename": filename,
-                    "file_type": parse_result.get("file_type", "unknown"),
-                    "emails_found": len(parse_result["emails"]),
-                    "errors": parse_result.get("errors", [])
+                    "file_type": file_info_data.get("file_type", parse_result.get("file_type", "unknown")),
+                    "emails_found": extraction_stats.get("emails_extracted", len(parse_result.get("emails", []))),
+                    "errors": parse_result.get("errors", []),
+                    "summary": summary  # Include full summary for detailed info
                 }
 
                 file_results.append(file_info)
-                all_emails.extend(parse_result["emails"])
+
+                # Extract email strings from new format (emails are now objects with metadata)
+                emails_data = parse_result.get("emails", [])
+                if emails_data and isinstance(emails_data[0], dict):
+                    # New format: extract email strings
+                    all_emails.extend([e["email"] for e in emails_data])
+                else:
+                    # Old format: emails are already strings
+                    all_emails.extend(emails_data)
 
                 if parse_result.get("errors"):
                     all_errors.extend([f"{filename}: {err}" for err in parse_result["errors"]])
@@ -748,15 +762,27 @@ def webhook_validate():
                 file_content, filename = download_remote_file(url)
                 parse_result = parse_file(file_content, filename)
 
+                # Extract file type from summary (new format) or fallback to old format
+                summary = parse_result.get("summary", {})
+                file_info_data = summary.get("file_info", {})
+                extraction_stats = summary.get("extraction_stats", {})
+
                 file_results.append({
                     "source_url": url,
                     "filename": filename,
-                    "file_type": parse_result.get("file_type", "unknown"),
-                    "emails_found": len(parse_result.get("emails", [])),
+                    "file_type": file_info_data.get("file_type", parse_result.get("file_type", "unknown")),
+                    "emails_found": extraction_stats.get("emails_extracted", len(parse_result.get("emails", []))),
                     "errors": parse_result.get("errors", []),
                 })
 
-                emails.extend(parse_result.get("emails", []))
+                # Extract email strings from new format
+                emails_data = parse_result.get("emails", [])
+                if emails_data and isinstance(emails_data[0], dict):
+                    # New format: extract email strings
+                    emails.extend([e["email"] for e in emails_data])
+                else:
+                    # Old format: emails are already strings
+                    emails.extend(emails_data)
             except Exception as e:
                 file_results.append({
                     "source_url": url,
