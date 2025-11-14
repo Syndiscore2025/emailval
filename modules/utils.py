@@ -80,14 +80,73 @@ def create_validation_result(email: str, valid: bool, checks: Dict[str, Any],
 def extract_domain(email: str) -> str:
     """
     Extract domain from email address
-    
+
     Args:
         email: Email address
-        
+
     Returns:
         Domain portion of email
     """
     if '@' not in email:
         return ""
     return email.split('@')[-1]
+
+
+def calculate_deliverability_score(validation_result: Dict[str, Any]) -> int:
+    """
+    Calculate deliverability score (0-100) based on validation checks.
+
+    Weighting:
+    - Syntax valid: 20 points
+    - Domain valid + MX records: 30 points
+    - Not disposable + not role-based: 20 points
+    - SMTP valid: 30 points
+
+    Args:
+        validation_result: Validation result dictionary from validate_email
+
+    Returns:
+        Deliverability score (0-100)
+    """
+    score = 0
+
+    # Syntax check (20 points)
+    if validation_result.get('checks', {}).get('syntax', {}).get('valid'):
+        score += 20
+
+    # Domain check (30 points)
+    domain_check = validation_result.get('checks', {}).get('domain', {})
+    if domain_check.get('valid') and domain_check.get('has_mx'):
+        score += 30
+
+    # Type check (20 points)
+    type_check = validation_result.get('checks', {}).get('type', {})
+    if not type_check.get('is_disposable') and not type_check.get('is_role_based'):
+        score += 20
+
+    # SMTP check (30 points)
+    if validation_result.get('checks', {}).get('smtp', {}).get('valid'):
+        score += 30
+
+    return score
+
+
+def get_deliverability_rating(score: int) -> str:
+    """
+    Get deliverability rating based on score.
+
+    Args:
+        score: Deliverability score (0-100)
+
+    Returns:
+        Rating string: 'Excellent', 'Good', 'Fair', or 'Poor'
+    """
+    if score >= 90:
+        return 'Excellent'
+    elif score >= 70:
+        return 'Good'
+    elif score >= 50:
+        return 'Fair'
+    else:
+        return 'Poor'
 
