@@ -4,6 +4,7 @@ A production-grade, modular SaaS web application for validating email addresses 
 
 ## Features
 
+### Core Validation
 - ✅ **Single Email Validation** - Validate individual email addresses via web UI or API
 - 📁 **Bulk File Upload** - Support for CSV, XLS, XLSX, and PDF files
 - 🔌 **CRM Integration** - Webhook endpoint for seamless CRM integration
@@ -12,6 +13,25 @@ A production-grade, modular SaaS web application for validating email addresses 
   - Domain validation (MX/A record lookup)
   - Type detection (disposable/role-based emails)
   - Optional SMTP verification
+  - **Deliverability Scoring** (0-100 with rating)
+
+### Advanced Features (Phase 4-7)
+- 🎯 **Dynamic Column Handling**:
+  - Intelligent @ symbol detection with confidence scoring
+  - Fuzzy column header matching (handles typos and variations)
+  - Row metadata preservation (name, phone, company, etc.)
+  - Normalized output format with source tracking
+- 📊 **Analytics Dashboard**:
+  - Real-time KPIs (total emails, valid %, API requests, active keys)
+  - Validation trends and charts
+  - Top domains analysis
+  - Domain reputation scoring
+- 📄 **Export & Reporting**:
+  - CSV export with detailed validation results
+  - Excel export with formatting and auto-column sizing
+  - PDF reports with summary statistics
+- 🔐 **API Authentication** - API key management with rate limiting
+- 📧 **Email Deduplication** - Persistent tracking across sessions
 - 🎨 **Modern UI** - VSCode-inspired dark theme with Tailwind CSS
 - 🚀 **Production Ready** - Render-deployable with health checks
 
@@ -28,17 +48,33 @@ email_validator/
 │   ├── domain_check.py    # DNS MX/A record validation
 │   ├── type_check.py      # Disposable/role-based detection
 │   ├── smtp_check.py      # SMTP mailbox verification
-│   ├── file_parser.py     # CSV/XLS/PDF parsing
-│   └── utils.py           # Utility functions
+│   ├── file_parser.py     # CSV/XLS/PDF parsing (Phase 4: Dynamic column handling)
+│   ├── reporting.py       # CSV/Excel/PDF report generation (Phase 6)
+│   ├── email_tracker.py   # Persistent email deduplication
+│   ├── api_auth.py        # API key authentication
+│   ├── crm_adapter.py     # CRM webhook integration
+│   └── utils.py           # Utility functions + deliverability scoring
 ├── templates/
-│   └── index.html         # Web interface
-├── static/                # Static assets
+│   ├── index.html         # Main web interface
+│   └── admin/
+│       └── dashboard.html # Admin dashboard (Phase 7)
+├── static/
+│   ├── css/
+│   │   └── admin.css      # Admin dashboard styles
+│   └── js/
+│       └── admin.js       # Admin dashboard JavaScript
+├── data/
+│   ├── email_history.json # Persistent email tracking database
+│   └── api_keys.json      # API key storage
 └── tests/
     ├── test_syntax.py
     ├── test_domain.py
     ├── test_type.py
     ├── test_file_parser.py
-    └── test_complete.py
+    ├── test_complete.py
+    ├── test_phase4.py     # Phase 4 tests
+    ├── test_analytics.py  # Phase 6 tests
+    └── test_e2e.py        # End-to-end integration tests (Phase 7)
 ```
 
 ## Installation
@@ -182,6 +218,62 @@ or
 }
 ```
 
+### 5. Analytics Dashboard (Phase 6)
+```
+GET /admin/analytics/data
+```
+Returns real-time analytics data including KPIs, trends, and domain statistics.
+
+**Response:**
+```json
+{
+  "kpis": {
+    "total_emails": 1500,
+    "valid_emails": 1450,
+    "invalid_emails": 50,
+    "valid_percentage": 96.7,
+    "total_validations": 25,
+    "duplicates_prevented": 120
+  },
+  "validation_trends": {
+    "daily": [
+      {"date": "2025-01-01", "total": 100, "valid": 95, "invalid": 5}
+    ]
+  },
+  "top_domains": [
+    {"domain": "gmail.com", "count": 450, "valid_percentage": 98.5}
+  ],
+  "domain_reputation": {
+    "gmail.com": {"score": 98, "total_validated": 450, "success_rate": 98.5}
+  },
+  "active_keys": 3
+}
+```
+
+### 6. Export Reports (Phase 6)
+```
+POST /api/export/csv
+POST /api/export/excel
+POST /api/export/pdf
+Content-Type: application/json
+X-API-Key: your-api-key
+```
+
+**Request:**
+```json
+{
+  "validation_results": [...],
+  "summary_stats": {
+    "total": 100,
+    "valid": 95,
+    "invalid": 5,
+    "valid_percent": 95.0
+  }
+}
+```
+
+**Response:** File download (CSV/Excel/PDF)
+
 ## Testing
 
 Run individual module tests:
@@ -190,6 +282,13 @@ python test_syntax.py
 python test_domain.py
 python test_type.py
 python test_file_parser.py
+```
+
+Run phase-specific tests:
+```bash
+python test_phase4.py      # Phase 4: Dynamic column handling
+python test_analytics.py   # Phase 6: Analytics & reporting
+python test_e2e.py         # Phase 7: End-to-end integration
 ```
 
 Run complete integration tests:

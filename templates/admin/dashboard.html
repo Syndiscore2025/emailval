@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Email Validator</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="admin-nav">
+        <div class="nav-brand">Email Validator Admin</div>
+        <div class="nav-links">
+            <a href="/admin" class="active">Dashboard</a>
+            <a href="/admin/api-keys">API Keys</a>
+            <a href="/admin/emails">Emails</a>
+            <a href="/admin/analytics">Analytics</a>
+            <a href="/admin/settings">Settings</a>
+            <a href="/">Back to App</a>
+        </div>
+    </nav>
+    
+    <div class="dashboard-container">
+        <h1>Admin Dashboard</h1>
+        
+        <!-- KPIs -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <h3>Total Emails</h3>
+                <p class="kpi-value" id="kpi-total-emails">Loading...</p>
+                <span class="kpi-label">Tracked in database</span>
+            </div>
+            <div class="kpi-card">
+                <h3>Valid %</h3>
+                <p class="kpi-value" id="kpi-valid-percent">Loading...</p>
+                <span class="kpi-label">Validation success rate</span>
+            </div>
+            <div class="kpi-card">
+                <h3>API Requests</h3>
+                <p class="kpi-value" id="kpi-api-requests">Loading...</p>
+                <span class="kpi-label">Total validations</span>
+            </div>
+            <div class="kpi-card">
+                <h3>Active Keys</h3>
+                <p class="kpi-value" id="kpi-active-keys">Loading...</p>
+                <span class="kpi-label">API keys in use</span>
+            </div>
+        </div>
+        
+        <!-- Charts -->
+        <div class="charts-section">
+            <div class="chart-container">
+                <h2>Validation Trends</h2>
+                <canvas id="validation-trends-chart"></canvas>
+            </div>
+            
+            <div class="chart-container">
+                <h2>Top Domains</h2>
+                <canvas id="top-domains-chart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Activity Feed -->
+        <div class="activity-section">
+            <h2>Recent Activity</h2>
+            <div id="activity-list" class="activity-list">
+                <p>Loading recent activity...</p>
+            </div>
+        </div>
+        
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <h2>Quick Actions</h2>
+            <div class="action-buttons">
+                <a href="/admin/api-keys" class="btn btn-primary">Manage API Keys</a>
+                <a href="/admin/emails" class="btn btn-secondary">View All Emails</a>
+                <a href="/admin/analytics" class="btn btn-secondary">Detailed Analytics</a>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/js/admin.js"></script>
+    <script>
+        // Initialize dashboard on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadKPIs();
+            loadCharts();
+            loadRecentActivity();
+        });
+    </script>
+</body>
+</html>
+

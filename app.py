@@ -257,6 +257,12 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/admin')
+def admin_dashboard():
+    """Render admin dashboard"""
+    return render_template('admin/dashboard.html')
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint for Render"""
