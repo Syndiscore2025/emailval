@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Validator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Email Validation</h1>
+            <p>Optimized for use, heavy processing, OCR parser compatible</p>
+        </header>
+
+        <div class="card">
+            <h2 class="card-title">Bulk File Upload & Validation</h2>
+            <p class="mb-3" style="color: var(--text-muted);">Upload multiple files at once. Supports CSV, XLS, XLSX, and PDF.</p>
+            <div id="dropZone" class="drop-zone">
+                <div class="drop-zone-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                </div>
+                <div class="drop-zone-text">Drop files here or click to browse</div>
+                <div class="drop-zone-subtext">You can select multiple files</div>
+            </div>
+            <input type="file" id="fileInput" accept=".csv,.xls,.xlsx,.pdf" multiple style="display: none;">
+            <div id="progressContainer" class="progress-container hidden">
+                <div class="progress-bar-bg">
+                    <div id="progressFill" class="progress-bar-fill" style="width: 0%"></div>
+                </div>
+                <div id="progressText" class="progress-text">Processing...</div>
+            </div>
+            <div id="fileList" class="hidden"></div>
+            <div class="mt-3">
+                <label class="flex items-center cursor-pointer">
+                    <input type="checkbox" id="bulkIncludeSmtp" name="include_smtp" class="mr-2">
+                    <span>Include SMTP verification (slower for large datasets)</span>
+                </label>
+            </div>
+            <div id="bulkResults" class="hidden"></div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">API Integration</h2>
+            <p class="mb-3" style="color: var(--text-muted);">Integrate via webhook for a seamless compression</p>
+            <div class="mb-3">
+                <label style="color: var(--text-muted); font-size: 0.875rem;">Endpoint</label>
+                <div class="code-block" style="margin-top: 0.5rem;">
+                    POST https://yourapp.onrender.com/api/webhook/validate
+                </div>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.875rem;">Supports file upload, webhook callbacks, and automated processing</p>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Email Database Statistics</h2>
+            <p class="mb-3" style="color: var(--text-muted);">Track all validated emails across sessions to prevent duplicate sends for marketing campaigns</p>
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                <button onclick="loadTrackerStats()" class="btn btn-secondary">
+                    View Database Stats
+                </button>
+                <button onclick="exportTrackedEmails()" class="btn btn-secondary">
+                    Export All Tracked Emails
+                </button>
+            </div>
+            <div id="trackerStats" class="mt-3"></div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
