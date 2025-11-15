@@ -1045,9 +1045,7 @@ def upload_file():
                 # Return immediately with job_id - client will stream progress via SSE
                 response["message"] = "SMTP validation started in background"
                 response["validation_status"] = "in_progress"
-                response["total_emails_found"] = total_emails
-                response["new_emails_count"] = len(new_emails)
-                response["duplicate_emails_count"] = len(duplicate_emails)
+                # total_emails_found already set in response dict above
 
                 # Return early - validation happening in background
                 return jsonify(response), 200
