@@ -73,14 +73,32 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
         # Phase 1: Fast checks
         # --------------------
         print(f"[BACKGROUND] Step 1: Running syntax/domain/type checks...")
+
+        # For smoother real-time updates on large files, update progress more frequently
+        # but avoid writing to disk on every single email.
+        UPDATE_BATCH_SIZE = 10 if total_emails > 200 else 1
+        last_update_time = time.time()
+
         for i, email in enumerate(emails_to_validate):
             result = validate_email_complete(email, include_smtp=False)
             validation_results.append(result)
 
             completed_precheck = i + 1
 
-            # For large datasets, update progress periodically so the UI moves
-            if completed_precheck % 50 == 0 or completed_precheck == total_emails:
+            # Decide whether to push a progress update
+            should_update = False
+            if completed_precheck % UPDATE_BATCH_SIZE == 0:
+                should_update = True
+
+            # Also update at least once per second so ETA doesn't drift upwards
+            now = time.time()
+            if now - last_update_time >= 1.0:
+                should_update = True
+
+            if completed_precheck == total_emails:
+                should_update = True
+
+            if should_update:
                 valid = sum(1 for r in validation_results if r.get('valid', False))
                 invalid = completed_precheck - valid
 
@@ -114,11 +132,12 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
                     f"({progress_fraction * 100:.1f}% of total)",
                 )
 
-            if (i + 1) % 100 == 0:
-                print(
-                    f"[BACKGROUND] Processed {i + 1}/{total_emails} "
-                    f"syntax/domain/type checks..."
-                )
+                last_update_time = now
+
+        print(
+            f"[BACKGROUND] Processed {total_emails}/{total_emails} "
+            f"syntax/domain/type checks..."
+        )
 
         print(f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated")
 
@@ -132,21 +151,6 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
             This keeps the progress bar moving smoothly for large files.
             """
 
-            # Count stats from current accumulated results
-            valid = sum(1 for r in validation_results if r.get('valid', False))
-            # Use a conservative invalid estimate; this is primarily for UI stats
-            invalid = max(0, completed_smtp - valid)
-
-            disposable = sum(
-                1 for r in validation_results
-                if r.get("checks", {}).get("type", {}).get("is_disposable", False)
-            )
-            role_based = sum(
-                1 for r in validation_results
-                if r.get("checks", {}).get("type", {}).get("is_role_based", False)
-            )
-            personal = valid - disposable - role_based
-
             # Phase 1 is fully done at this point
             precheck_progress = PRECHECK_WEIGHT
             smtp_progress = SMTP_WEIGHT * (completed_smtp / max(total_smtp, 1))
@@ -154,20 +158,23 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
 
             effective_validated = int(total_emails * total_progress_fraction)
 
+            # Only update the overall progress counter here; keep detailed
+            # stats (valid/invalid/etc.) from the pre-check phase until we
+            # have final SMTP results.
             job_tracker.update_progress(
                 job_id,
                 effective_validated,
-                valid,
-                invalid,
-                disposable,
-                role_based,
-                personal,
             )
+
+            # For logging, still show current pre-check counts so we can see
+            # how many emails look good so far.
+            valid_precheck = sum(1 for r in validation_results if r.get("valid", False))
+            invalid_precheck = total_emails - valid_precheck
 
             print(
                 f"[BACKGROUND] SMTP Progress: {completed_smtp}/{total_smtp} "
                 f"({total_progress_fraction * 100:.1f}% of total) - "
-                f"Valid: {valid}, Invalid: {invalid}"
+                f"Pre-check valid: {valid_precheck}, Pre-check invalid: {invalid_precheck}"
             )
 
         print(f"[BACKGROUND] Running parallel SMTP checks with 50 concurrent connections...")
@@ -181,19 +188,45 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
 
         # Merge SMTP results into validation results
         for i, result in enumerate(validation_results):
-            email = result['email']
+            email = result["email"]
             if email in smtp_results:
                 smtp_data = smtp_results[email]
-                result['checks']['smtp'] = {
-                    'valid': smtp_data.get('valid', False),
-                    'mailbox_exists': smtp_data.get('mailbox_exists', False),
-                    'smtp_response': smtp_data.get('smtp_response', ''),
-                    'errors': smtp_data.get('errors', []),
-                    'skipped': smtp_data.get('skipped', False),
+                result["checks"]["smtp"] = {
+                    "valid": smtp_data.get("valid", False),
+                    "mailbox_exists": smtp_data.get("mailbox_exists", False),
+                    "smtp_response": smtp_data.get("smtp_response", ""),
+                    "errors": smtp_data.get("errors", []),
+                    "skipped": smtp_data.get("skipped", False),
                 }
                 # Update overall validity based on SMTP
-                if not smtp_data.get('skipped', False):
-                    result['valid'] = result['valid'] and smtp_data.get('valid', False)
+                if not smtp_data.get("skipped", False):
+                    result["valid"] = result["valid"] and smtp_data.get("valid", False)
+
+        # After merging SMTP results, compute final stats and push one last update
+        final_valid = sum(1 for r in validation_results if r.get("valid", False))
+        final_invalid = total_emails - final_valid
+
+        final_disposable = sum(
+            1
+            for r in validation_results
+            if r.get("checks", {}).get("type", {}).get("is_disposable", False)
+        )
+        final_role_based = sum(
+            1
+            for r in validation_results
+            if r.get("checks", {}).get("type", {}).get("is_role_based", False)
+        )
+        final_personal = final_valid - final_disposable - final_role_based
+
+        job_tracker.update_progress(
+            job_id,
+            total_emails,
+            final_valid,
+            final_invalid,
+            final_disposable,
+            final_role_based,
+            final_personal,
+        )
 
         print(f"[BACKGROUND] Parallel SMTP validation complete for job {job_id}")
 

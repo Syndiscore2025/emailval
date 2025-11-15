@@ -7,6 +7,10 @@ const state = {
     isProcessing: false
 };
 
+// Timer for fallback job-status polling when SSE fails
+let jobStatusPollTimerId = null;
+
+
 // Common email typos for suggestions
 const commonDomains = {
     'gmial.com': 'gmail.com',
@@ -34,19 +38,19 @@ function initializeSingleEmailForm() {
 
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
-        
+
         const emailInput = document.getElementById('emailInput');
         const email = emailInput.value.trim();
-        
+
         if (!email) {
             showError('Please enter an email address');
             return;
         }
 
         const includeSmtp = document.getElementById('includeSmtp')?.checked || false;
-        
+
         showLoading('singleEmailResults');
-        
+
         try {
             const response = await fetch('/validate', {
                 method: 'POST',
@@ -61,7 +65,7 @@ function initializeSingleEmailForm() {
 
             const data = await response.json();
             displaySingleResult(data);
-            
+
         } catch (error) {
             showError('Validation failed: ' + error.message);
         }
@@ -89,24 +93,24 @@ function displaySingleResult(result) {
                     ${isValid ? '✓ Valid' : '✗ Invalid'}
                 </span>
             </div>
-            
+
             <div class="mb-2">
-                <strong>Syntax:</strong> 
+                <strong>Syntax:</strong>
                 <span class="badge ${checks.syntax?.valid ? 'badge-success' : 'badge-error'}">
                     ${checks.syntax?.valid ? '✓ Pass' : '✗ Fail'}
                 </span>
             </div>
-            
+
             <div class="mb-2">
-                <strong>Domain:</strong> 
+                <strong>Domain:</strong>
                 <span class="badge ${checks.domain?.valid ? 'badge-success' : 'badge-error'}">
                     ${checks.domain?.valid ? '✓ Pass' : '✗ Fail'}
                 </span>
                 ${checks.domain?.has_mx ? '<span class="text-secondary ml-2">(MX records found)</span>' : ''}
             </div>
-            
+
             <div class="mb-2">
-                <strong>Type:</strong> 
+                <strong>Type:</strong>
                 <span class="badge ${getTypeBadgeClass(checks.type?.email_type)}">
                     ${checks.type?.email_type || 'unknown'}
                 </span>
@@ -141,7 +145,7 @@ function displaySingleResult(result) {
     }
 
     html += `</div>`;
-    
+
     container.innerHTML = html;
     container.classList.remove('hidden');
 }
@@ -149,7 +153,7 @@ function displaySingleResult(result) {
 // Get typo suggestion
 function getSuggestion(email) {
     if (!email || !email.includes('@')) return null;
-    
+
     const domain = email.split('@')[1].toLowerCase();
     return commonDomains[domain] ? email.split('@')[0] + '@' + commonDomains[domain] : null;
 }
@@ -414,13 +418,10 @@ async function uploadFiles() {
                 console.error('[SSE] Error occurred:', error);
                 console.error('[SSE] EventSource readyState:', eventSource.readyState);
                 eventSource.close();
-                // Fall back to showing completion
-                showProgress(100, 'Complete!');
-                setTimeout(() => {
-                    hideProgress();
-                    console.log('[SSE] Falling back to initial data:', data);
-                    displayBulkResults(data);
-                }, 500);
+                console.log('[SSE] Connection lost, falling back to polling job status');
+                // Do NOT mark as complete here; continue tracking via polling so
+                // long-running jobs can finish even if the SSE connection drops.
+                startJobStatusPolling(jobId, data);
             };
         } else {
             // No job tracking, show completion immediately
@@ -442,6 +443,107 @@ async function uploadFiles() {
     } finally {
         state.isProcessing = false;
     }
+
+// Fallback: poll job status if SSE connection drops
+function startJobStatusPolling(jobId, initialData) {
+    const POLL_INTERVAL_MS = 5000;
+    const MAX_ATTEMPTS = 720; // ~1 hour of polling if needed
+    let attempts = 0;
+
+    if (jobStatusPollTimerId) {
+        clearInterval(jobStatusPollTimerId);
+        jobStatusPollTimerId = null;
+    }
+
+    const poll = async () => {
+        attempts += 1;
+        try {
+            const response = await fetch(`/api/jobs/${jobId}`);
+            if (!response.ok) {
+                throw new Error(`Job poll failed with status ${response.status}`);
+            }
+
+            const progress = await response.json();
+            console.log('[POLL] Job progress:', progress);
+
+            const percent = progress.progress_percent || 0;
+            const validated = progress.validated_count || 0;
+            const total = progress.total_emails || 0;
+            const validCount = progress.valid_count || 0;
+            const invalidCount = progress.invalid_count || 0;
+            const disposableCount = progress.disposable_count || 0;
+            const timeRemaining = progress.time_remaining_seconds || 0;
+
+            if (progress.status === 'completed' || progress.status === 'failed') {
+                const stats = {
+                    valid: validCount,
+                    invalid: invalidCount,
+                    disposable: disposableCount
+                };
+
+                showProgress(
+                    100,
+                    progress.status === 'completed' ? 'Complete!' : 'Validation failed',
+                    stats
+                );
+
+                clearInterval(jobStatusPollTimerId);
+                jobStatusPollTimerId = null;
+
+                setTimeout(() => {
+                    hideProgress();
+
+                    const finalData = {
+                        ...initialData,
+                        validation_summary: {
+                            valid: validCount,
+                            invalid: invalidCount,
+                            total: total,
+                            disposable: disposableCount,
+                            role_based: progress.role_based_count || 0,
+                            personal: progress.personal_count || 0
+                        }
+                    };
+
+                    console.log('[POLL] Final data (fallback):', finalData);
+                    displayBulkResults(finalData);
+                    state.validationResults = [];
+                }, 500);
+            } else {
+                let message = `Validating ${validated} / ${total} emails (${percent.toFixed(1)}%)`;
+                if (timeRemaining > 0) {
+                    const minutes = Math.floor(timeRemaining / 60);
+                    const seconds = Math.floor(timeRemaining % 60);
+                    message += ` - ${minutes}m ${seconds}s remaining`;
+                }
+
+                const stats = {
+                    valid: validCount,
+                    invalid: invalidCount,
+                    disposable: disposableCount
+                };
+
+                showProgress(percent, message, stats);
+            }
+        } catch (error) {
+            console.error('[POLL] Error while polling job status:', error);
+            if (attempts >= MAX_ATTEMPTS) {
+                clearInterval(jobStatusPollTimerId);
+                jobStatusPollTimerId = null;
+
+                showProgress(100, 'Complete (connection lost)');
+                setTimeout(() => {
+                    hideProgress();
+                    console.log('[POLL] Giving up after repeated failures, showing initial data');
+                    displayBulkResults(initialData);
+                }, 500);
+            }
+        }
+    };
+
+    // Kick off immediately, then poll periodically
+    poll();
+    jobStatusPollTimerId = setInterval(poll, POLL_INTERVAL_MS);
 }
 
 // Display bulk validation results
