@@ -396,11 +396,13 @@ async function uploadFiles() {
                     const disposableCount = progress.disposable_count || 0;
                     const timeRemaining = progress.time_remaining_seconds || 0;
 
-                    let message = `Validating ${validated} / ${total} emails (${percent.toFixed(1)}%)`;
+                    // Show overall percentage and total; avoid implying that
+                    // "validated" is the exact count of fully finished emails.
+                    let message = `Validation in progress: ${percent.toFixed(1)}% complete for ${total} emails`;
                     if (timeRemaining > 0) {
                         const minutes = Math.floor(timeRemaining / 60);
                         const seconds = Math.floor(timeRemaining % 60);
-                        message += ` - ${minutes}m ${seconds}s remaining`;
+                        message += ` · ${minutes}m ${seconds}s remaining`;
                     }
 
                     const stats = {
@@ -510,11 +512,12 @@ function startJobStatusPolling(jobId, initialData) {
                     state.validationResults = [];
                 }, 500);
             } else {
-                let message = `Validating ${validated} / ${total} emails (${percent.toFixed(1)}%)`;
+                // Polling fallback uses the same wording as SSE for consistency
+                let message = `Validation in progress: ${percent.toFixed(1)}% complete for ${total} emails`;
                 if (timeRemaining > 0) {
                     const minutes = Math.floor(timeRemaining / 60);
                     const seconds = Math.floor(timeRemaining % 60);
-                    message += ` - ${minutes}m ${seconds}s remaining`;
+                    message += ` · ${minutes}m ${seconds}s remaining`;
                 }
 
                 const stats = {
