@@ -512,6 +512,10 @@ def clear_database():
             }
         }
         tracker._save_database()
+
+        # Force reload from disk to clear in-memory cache
+        tracker.data = tracker._load_database()
+
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -902,33 +906,42 @@ def upload_file():
             # SMTP validation uses parallel processing for speed
             if include_smtp:
                 print(f"[UPLOAD] Using parallel SMTP validation for {len(emails_to_validate)} emails...")
+                print(f"[UPLOAD] Sample emails to validate: {emails_to_validate[:3]}")
 
-                # First do syntax, domain, and type checks (fast)
-                for email in emails_to_validate:
-                    result = validate_email_complete(email, include_smtp=False)
-                    validation_results.append(result)
+                try:
+                    # First do syntax, domain, and type checks (fast)
+                    for email in emails_to_validate:
+                        result = validate_email_complete(email, include_smtp=False)
+                        validation_results.append(result)
 
-                # Then do SMTP checks in parallel (slow but parallelized)
-                print(f"[UPLOAD] Running parallel SMTP checks with 20 concurrent connections...")
-                smtp_results = validate_smtp_batch(emails_to_validate, max_workers=20, timeout=5)
+                    # Then do SMTP checks in parallel (slow but parallelized)
+                    print(f"[UPLOAD] Running parallel SMTP checks with 20 concurrent connections...")
+                    smtp_results = validate_smtp_batch(emails_to_validate, max_workers=20, timeout=5)
+                    print(f"[UPLOAD] SMTP batch complete, got {len(smtp_results)} results")
 
-                # Merge SMTP results into validation results
-                for i, result in enumerate(validation_results):
-                    email = result['email']
-                    if email in smtp_results:
-                        smtp_data = smtp_results[email]
-                        result['checks']['smtp'] = {
-                            'valid': smtp_data.get('valid', False),
-                            'mailbox_exists': smtp_data.get('mailbox_exists', False),
-                            'smtp_response': smtp_data.get('smtp_response', ''),
-                            'errors': smtp_data.get('errors', []),
-                            'skipped': smtp_data.get('skipped', False)
-                        }
-                        # Update overall validity based on SMTP
-                        if not smtp_data.get('skipped', False):
-                            result['valid'] = result['valid'] and smtp_data.get('valid', False)
+                    # Merge SMTP results into validation results
+                    for i, result in enumerate(validation_results):
+                        email = result['email']
+                        if email in smtp_results:
+                            smtp_data = smtp_results[email]
+                            result['checks']['smtp'] = {
+                                'valid': smtp_data.get('valid', False),
+                                'mailbox_exists': smtp_data.get('mailbox_exists', False),
+                                'smtp_response': smtp_data.get('smtp_response', ''),
+                                'errors': smtp_data.get('errors', []),
+                                'skipped': smtp_data.get('skipped', False)
+                            }
+                            # Update overall validity based on SMTP
+                            if not smtp_data.get('skipped', False):
+                                result['valid'] = result['valid'] and smtp_data.get('valid', False)
 
-                print(f"[UPLOAD] Parallel SMTP validation complete")
+                    print(f"[UPLOAD] Parallel SMTP validation complete")
+                except Exception as smtp_error:
+                    print(f"[UPLOAD] SMTP validation error: {smtp_error}")
+                    import traceback
+                    print(traceback.format_exc())
+                    # Continue without SMTP validation
+                    response["smtp_error"] = f"SMTP validation failed: {str(smtp_error)}"
             else:
                 # Non-SMTP validation (fast, sequential is fine)
                 for i in range(0, len(emails_to_validate), batch_size):
@@ -992,6 +1005,9 @@ def upload_file():
         return jsonify(response), 200
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[UPLOAD] ERROR: {error_details}")
         return jsonify({
             "error": f"Upload processing error: {str(e)}"
         }), 500
