@@ -502,16 +502,8 @@ def clear_database():
     """Clear all database data"""
     try:
         tracker = get_tracker()
-        tracker.data = {
-            "emails": {},
-            "sessions": [],
-            "stats": {
-                "total_unique_emails": 0,
-                "total_upload_sessions": 0,
-                "total_duplicates_prevented": 0
-            }
-        }
-        tracker._save_database()
+        # Use the tracker's own method to ensure correct structure
+        tracker.clear_database()
 
         # Force reload from disk to clear in-memory cache
         tracker.data = tracker._load_database()
