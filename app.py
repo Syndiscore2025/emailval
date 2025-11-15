@@ -39,10 +39,15 @@ from modules.api_auth import require_api_key, get_key_manager
 from modules.crm_adapter import parse_crm_request, build_crm_response, get_crm_event_type, validate_crm_vendor
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
 from modules.admin_auth import (
-    authenticate_admin, create_admin_session, destroy_admin_session,
-    is_admin_logged_in, require_admin_login, require_admin_api,
-    change_admin_password
+    authenticate_admin,
+    create_admin_session,
+    destroy_admin_session,
+    is_admin_logged_in,
+    require_admin_login,
+    require_admin_api,
+    change_admin_password,
 )
+from modules.obvious_invalid import is_obviously_invalid
 
 app = Flask(__name__)
 
@@ -591,9 +596,19 @@ def get_emails():
         emails_data = []
 
         for email, data in tracker.data.get('emails', {}).items():
+            status = data.get('status')
+            if not status:
+                # Backwards compatible: infer from "valid" flag if no explicit status
+                if data.get('valid') is True:
+                    status = 'valid'
+                elif data.get('valid') is False:
+                    status = 'invalid'
+                else:
+                    status = 'unknown'
+
             emails_data.append({
                 'email': email,
-                'status': 'valid' if data.get('valid', False) else 'invalid',
+                'status': status,
                 'type': data.get('type', 'unknown'),
                 'domain': email.split('@')[1] if '@' in email else '',
                 'first_seen': data.get('first_seen', ''),
@@ -605,6 +620,112 @@ def get_emails():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+@app.route('/admin/api/emails/reverify', methods=['POST'])
+@require_admin_api
+def admin_reverify_emails():
+    """Re-validate one or more invalid emails.
+
+    Request JSON: {"emails": ["foo@example.com", ...]}
+    """
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+
+        if not isinstance(emails, list) or not emails:
+            return jsonify({"success": False, "error": "No emails provided"}), 400
+
+        tracker = get_tracker()
+        results = []
+
+        for raw_email in emails:
+            if not raw_email or not isinstance(raw_email, str):
+                continue
+
+            email = raw_email.strip().lower()
+
+            # First, check if this is obviously invalid junk
+            is_obvious, reason = is_obviously_invalid(email)
+            if is_obvious:
+                record = tracker.data.get("emails", {}).get(email, {})
+                record["status"] = "disposable"
+                record["delete_reason"] = reason or "obvious_invalid"
+                record["valid"] = False
+                record["is_disposable"] = True
+                tracker.data.setdefault("emails", {})[email] = record
+                results.append({"email": email, "status": "disposable", "reason": record["delete_reason"]})
+                continue
+
+            # Run validation twice max
+            first = validate_email_complete(email, include_smtp=True)
+            final = first
+            if not first.get("valid"):
+                second = validate_email_complete(email, include_smtp=True)
+                if second.get("valid"):
+                    meta = second.setdefault("meta", {})
+                    meta["rescued_on_second_pass"] = True
+                    final = second
+                else:
+                    checks = final.setdefault("checks", {})
+                    type_checks = checks.setdefault("type", {})
+                    type_checks["is_disposable"] = True
+                    if not type_checks.get("email_type"):
+                        type_checks["email_type"] = "disposable"
+                    errors = final.setdefault("errors", [])
+                    errors.append({
+                        "code": "failed_twice",
+                        "message": "Still invalid after re-verify; marked disposable.",
+                    })
+
+            # Update tracker with this single-email session
+            tracker.track_emails([email], [final], {"session_type": "admin_reverify"})
+            results.append({
+                "email": email,
+                "valid": final.get("valid", False),
+                "checks": final.get("checks", {}),
+            })
+
+        return jsonify({"success": True, "results": results})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route('/admin/api/emails/delete', methods=['POST'])
+@require_admin_api
+def admin_delete_emails():
+    """Soft-delete disposable emails from the active pool but keep history.
+
+    Request JSON: {"emails": ["foo@example.com", ...]}
+    """
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails') or []
+
+        if not isinstance(emails, list) or not emails:
+            return jsonify({"success": False, "error": "No emails provided"}), 400
+
+        tracker = get_tracker()
+        deleted = []
+
+        for raw_email in emails:
+            if not raw_email or not isinstance(raw_email, str):
+                continue
+
+            email = raw_email.strip().lower()
+            record = tracker.data.get("emails", {}).get(email)
+            if not record:
+                continue
+
+            record["status"] = "deleted_manual"
+            record["delete_reason"] = "user_deleted"
+            tracker.data["emails"][email] = record
+            deleted.append(email)
+
+        tracker._save_database()
+
+        return jsonify({"success": True, "deleted": deleted})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 @app.route('/admin/settings')
 @require_admin_login
@@ -759,14 +880,31 @@ def get_logs():
             new_emails = session.get('new_emails', 0)
             duplicates = session.get('duplicates', 0)
 
+            # Determine session type (bulk upload vs webhook/CRM)
+            session_type = session.get('session_type', 'bulk')
+
+            # Format duration if available
+            duration_ms = session.get('duration_ms')
+            if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
+                if duration_ms < 1000:
+                    duration_str = f"{int(duration_ms)}ms"
+                elif duration_ms < 60000:
+                    duration_str = f"{duration_ms / 1000:.1f}s"
+                else:
+                    minutes = int(duration_ms // 60000)
+                    seconds = int((duration_ms % 60000) // 1000)
+                    duration_str = f"{minutes}m {seconds}s"
+            else:
+                duration_str = "-"
+
             logs.append({
                 'timestamp': session.get('timestamp', ''),
-                'type': 'bulk',
+                'type': session_type,
                 'email': filename_str,
                 'filename': filename_str,
                 'status': 'success',
                 'result': f"{emails_count} emails found ({new_emails} new, {duplicates} duplicates)",
-                'duration': '0ms',
+                'duration': duration_str,
                 'ip': 'N/A'
             })
 
@@ -1253,9 +1391,25 @@ def upload_file():
             response["full_results_count"] = len(validation_results)
 
             # Track the new emails in the database
+            from datetime import datetime
+
+            duration_ms = 0
+            # For bulk uploads we don't have a per-job started_at, so approximate
+            # duration from when this request began. If session_info with a
+            # started_at was passed in the future we could refine this.
+            request_start = session_info.get("started_at") if "session_info" in locals() else None
+            if request_start:
+                try:
+                    start_dt = datetime.fromisoformat(request_start)
+                    duration_ms = int((datetime.now() - start_dt).total_seconds() * 1000)
+                except Exception:
+                    duration_ms = 0
+
             session_info = {
                 "files_processed": len(file_results),
-                "filenames": [f["filename"] for f in file_results]
+                "filenames": [f["filename"] for f in file_results],
+                "session_type": "bulk",
+                "duration_ms": duration_ms,
             }
             tracking_stats = tracker.track_emails(new_emails, validation_results, session_info)
             response["tracking_stats"] = tracking_stats
@@ -1271,7 +1425,8 @@ def upload_file():
                 session_info = {
                     "files_processed": len(file_results),
                     "filenames": [f["filename"] for f in file_results],
-                    "validation_skipped": True
+                    "validation_skipped": True,
+                    "session_type": "bulk",
                 }
                 tracking_stats = tracker.track_emails(new_emails, None, session_info)
                 response["tracking_stats"] = tracking_stats
@@ -1531,10 +1686,88 @@ def webhook_validate():
 
         # Validate all emails
         results = []
+        from datetime import datetime
+        tracker = get_tracker()
+
+        results = []
+        crm_session_start = datetime.now()
+
         for email in emails:
-            if email and isinstance(email, str):
-                result = validate_email_complete(email, include_smtp=include_smtp)
+            if not email or not isinstance(email, str):
+                continue
+
+            # Fast path: obviously garbage -> disposable immediately
+            is_obvious, reason = is_obviously_invalid(email)
+            if is_obvious:
+                checks = {
+                    "syntax": {"valid": False, "errors": []},
+                    "domain": {
+                        "valid": False,
+                        "has_mx": False,
+                        "has_a": False,
+                        "mx_records": [],
+                        "errors": [],
+                    },
+                    "type": {
+                        "is_disposable": True,
+                        "is_role_based": False,
+                        "email_type": "disposable",
+                        "warnings": [],
+                    },
+                }
+                errors = [
+                    {
+                        "code": reason or "obvious_invalid",
+                        "message": "Obvious invalid pattern detected in CRM flow; marked disposable.",
+                    }
+                ]
+                result = {
+                    "email": email,
+                    "valid": False,
+                    "checks": checks,
+                    "errors": errors,
+                }
                 results.append(result)
+                continue
+
+            # Normal validation with a second-pass retry if first pass is invalid
+            result = validate_email_complete(email, include_smtp=include_smtp)
+            if not result.get("valid"):
+                second_result = validate_email_complete(email, include_smtp=include_smtp)
+                if second_result.get("valid"):
+                    # Rescued on second pass
+                    meta = second_result.setdefault("meta", {})
+                    meta["rescued_on_second_pass"] = True
+                    result = second_result
+                else:
+                    # Still invalid after second attempt: treat as disposable
+                    checks = result.setdefault("checks", {})
+                    type_checks = checks.setdefault("type", {})
+                    type_checks["is_disposable"] = True
+                    if not type_checks.get("email_type"):
+                        type_checks["email_type"] = "disposable"
+                    errors = result.setdefault("errors", [])
+                    errors.append(
+                        {
+                            "code": "failed_twice",
+                            "message": "Invalid in CRM flow even after second validation; marked disposable.",
+                        }
+                    )
+
+            results.append(result)
+
+        # Track these emails so admin explorer stays in sync with CRM validations
+        duration_ms = int((datetime.now() - crm_session_start).total_seconds() * 1000)
+        tracker.track_emails(
+            emails,
+            results,
+            {
+                "session_type": "webhook",
+                "integration_mode": integration_mode,
+                "crm_vendor": crm_vendor,
+                "duration_ms": duration_ms,
+            },
+        )
 
         # Build CRM-compatible response
         job_id = str(uuid4()) if callback_url else None

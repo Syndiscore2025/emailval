@@ -63,7 +63,7 @@ function renderLogs() {
             <td><code>${escapeHtml(log.email || log.filename || 'N/A')}</code></td>
             <td><span class="status-badge ${log.status}">${log.status}</span></td>
             <td>${log.result || 'N/A'}</td>
-            <td>${log.duration || 0}ms</td>
+            <td>${log.duration || '-'}</td>
             <td>${log.ip || 'N/A'}</td>
             <td>
                 <button class="btn-primary-sm" onclick='showLogDetails(${JSON.stringify(log).replace(/'/g, "&apos;")})'>Details</button>
@@ -86,7 +86,7 @@ function showLogDetails(log) {
             <div class="detail-row"><strong>Email/File:</strong><span>${escapeHtml(log.email || log.filename || 'N/A')}</span></div>
             <div class="detail-row"><strong>Status:</strong><span class="status-badge ${log.status}">${log.status}</span></div>
             <div class="detail-row"><strong>Result:</strong><span>${log.result || 'N/A'}</span></div>
-            <div class="detail-row"><strong>Duration:</strong><span>${log.duration || 0}ms</span></div>
+            <div class="detail-row"><strong>Duration:</strong><span>${log.duration || '-'}</span></div>
             <div class="detail-row"><strong>IP Address:</strong><span>${log.ip || 'N/A'}</span></div>
         </div>
     `;

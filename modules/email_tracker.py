@@ -140,17 +140,26 @@ class EmailTracker:
 
             if email_lower in self.data["emails"]:
                 # Update existing email
-                self.data["emails"][email_lower]["last_seen"] = timestamp
-                self.data["emails"][email_lower]["send_count"] += 1
+                record = self.data["emails"][email_lower]
+                record["last_seen"] = timestamp
+                record["send_count"] += 1
 
                 # Update validation data if provided
                 if validation_data:
-                    self.data["emails"][email_lower]["valid"] = validation_data.get('valid', False)
-                    self.data["emails"][email_lower]["type"] = validation_data.get('type', 'unknown')
-                    self.data["emails"][email_lower]["is_disposable"] = validation_data.get('is_disposable', False)
-                    self.data["emails"][email_lower]["is_role_based"] = validation_data.get('is_role_based', False)
-                    self.data["emails"][email_lower]["last_validated"] = timestamp
-                    self.data["emails"][email_lower]["validation_count"] = self.data["emails"][email_lower].get("validation_count", 0) + 1
+                    record["valid"] = validation_data.get('valid', False)
+                    record["type"] = validation_data.get('type', 'unknown')
+                    record["is_disposable"] = validation_data.get('is_disposable', False)
+                    record["is_role_based"] = validation_data.get('is_role_based', False)
+                    record["last_validated"] = timestamp
+                    record["validation_count"] = record.get("validation_count", 0) + 1
+
+                    # Update high-level status for admin filtering
+                    if record["valid"] is True:
+                        record["status"] = "valid"
+                    elif record.get("is_disposable"):
+                        record["status"] = "disposable"
+                    else:
+                        record["status"] = "invalid"
 
                 updated_count += 1
             else:
@@ -159,7 +168,7 @@ class EmailTracker:
                     "first_seen": timestamp,
                     "last_seen": timestamp,
                     "send_count": 1,
-                    "validation_count": 1 if validation_data else 0
+                    "validation_count": 1 if validation_data else 0,
                 }
 
                 # Add validation fields if available
@@ -169,16 +178,24 @@ class EmailTracker:
                     email_record["is_disposable"] = validation_data.get('is_disposable', False)
                     email_record["is_role_based"] = validation_data.get('is_role_based', False)
                     email_record["last_validated"] = timestamp
+
+                    if email_record["valid"] is True:
+                        email_record["status"] = "valid"
+                    elif email_record.get("is_disposable"):
+                        email_record["status"] = "disposable"
+                    else:
+                        email_record["status"] = "invalid"
                 else:
                     email_record["valid"] = None
                     email_record["type"] = "unknown"
                     email_record["is_disposable"] = False
                     email_record["is_role_based"] = False
                     email_record["last_validated"] = None
+                    email_record["status"] = "unknown"
 
                 self.data["emails"][email_lower] = email_record
                 new_count += 1
-        
+
         # Track session
         if session_info:
             session_data = {

@@ -19,7 +19,7 @@ async function loadEmails() {
     try {
         const response = await fetch('/admin/api/emails');
         const data = await response.json();
-        
+
         if (data.success) {
             allEmails = data.emails;
             filteredEmails = allEmails;
@@ -40,26 +40,26 @@ function filterEmails() {
     const searchTerm = document.getElementById('search-input').value.toLowerCase();
     const statusFilter = document.getElementById('status-filter').value;
     const typeFilter = document.getElementById('type-filter').value;
-    
+
     filteredEmails = allEmails.filter(email => {
         // Search filter
         if (searchTerm && !email.email.toLowerCase().includes(searchTerm)) {
             return false;
         }
-        
+
         // Status filter
         if (statusFilter && email.status !== statusFilter) {
             return false;
         }
-        
+
         // Type filter
         if (typeFilter && email.type !== typeFilter) {
             return false;
         }
-        
+
         return true;
     });
-    
+
     currentPage = 1;
     updateStats();
     renderEmails();
@@ -71,11 +71,20 @@ function filterEmails() {
 function updateStats() {
     const validCount = allEmails.filter(e => e.status === 'valid').length;
     const invalidCount = allEmails.filter(e => e.status === 'invalid').length;
-    
+    const disposableCount = allEmails.filter(e => e.status === 'disposable').length;
+
     document.getElementById('total-count').textContent = allEmails.length;
     document.getElementById('valid-count').textContent = validCount;
     document.getElementById('invalid-count').textContent = invalidCount;
-    document.getElementById('showing-count').textContent = filteredEmails.length;
+    const showingEl = document.getElementById('showing-count');
+    if (showingEl) {
+        showingEl.textContent = filteredEmails.length;
+    }
+
+    const disposableEl = document.getElementById('disposable-count');
+    if (disposableEl) {
+        disposableEl.textContent = disposableCount;
+    }
 }
 
 /**
@@ -87,12 +96,12 @@ function renderEmails() {
     const startIdx = (currentPage - 1) * pageSize;
     const endIdx = startIdx + pageSize;
     const pageEmails = filteredEmails.slice(startIdx, endIdx);
-    
+
     if (pageEmails.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" style="text-align: center;">No emails found</td></tr>';
         return;
     }
-    
+
     tbody.innerHTML = pageEmails.map(email => `
         <tr>
             <td><code>${escapeHtml(email.email)}</code></td>
@@ -104,10 +113,12 @@ function renderEmails() {
             <td>${email.validation_count || 0}</td>
             <td>
                 <button class="btn-primary-sm" onclick='showEmailDetails(${JSON.stringify(email).replace(/'/g, "&apos;")})'>Details</button>
+                ${email.status === 'invalid' ? `<button class="btn-secondary-sm" onclick="reverifyEmail('${encodeURIComponent(email.email)}')">Re-verify</button>` : ''}
+                ${email.status === 'disposable' ? `<button class="btn-danger-sm" onclick="deleteEmailWrapper('${encodeURIComponent(email.email)}')">Delete</button>` : ''}
             </td>
         </tr>
     `).join('');
-    
+
     // Update pagination
     document.getElementById('current-page').textContent = currentPage;
     document.getElementById('total-pages').textContent = totalPages;
@@ -153,6 +164,61 @@ function showEmailDetails(email) {
         </div>
     `;
     document.getElementById('email-details-modal').style.display = 'flex';
+}
+
+/**
+ * Re-verify a single invalid email
+ */
+async function reverifyEmail(rawEmail) {
+    const email = decodeURIComponent(rawEmail);
+    if (!confirm(`Re-verify ${email}? This may take a moment.`)) {
+        return;
+    }
+    try {
+        const response = await fetch('/admin/api/emails/reverify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ emails: [email] }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            return showError('Re-verify failed: ' + (data.error || 'Unknown error'));
+        }
+        // Reload table to reflect updated status
+        await loadEmails();
+    } catch (err) {
+        showError('Re-verify error: ' + err.message);
+    }
+}
+
+
+// Wrapper to avoid inline template literal quoting issues
+function deleteEmailWrapper(rawEmail) {
+    deleteEmail(rawEmail);
+}
+
+/**
+ * Delete a disposable email (soft delete)
+ */
+async function deleteEmail(rawEmail) {
+    const email = decodeURIComponent(rawEmail);
+    if (!confirm(`Delete ${email} from active list? This keeps a minimal history.`)) {
+        return;
+    }
+    try {
+        const response = await fetch('/admin/api/emails/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ emails: [email] }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            return showError('Delete failed: ' + (data.error || 'Unknown error'));
+        }
+        await loadEmails();
+    } catch (err) {
+        showError('Delete error: ' + err.message);
+    }
 }
 
 /**
