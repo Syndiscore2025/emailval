@@ -342,7 +342,7 @@ async function uploadFiles() {
             // Connect to SSE stream for real-time progress
             const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
 
-            eventSource.onmessage = function(event) {
+            eventSource.onmessage = async function(event) {
                 const progress = JSON.parse(event.data);
 
                 if (progress.status === 'done') {
@@ -351,12 +351,26 @@ async function uploadFiles() {
 
                     setTimeout(() => {
                         hideProgress();
-                        displayBulkResults(data);
-                        state.validationResults = data.validation_results || [];
 
-                        const totalEmails = data.total_emails_found || 0;
-                        const newEmails = data.new_emails_count || 0;
-                        showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new)`);
+                        // Update data with final counts from progress
+                        const finalData = {
+                            ...data,
+                            validation_summary: {
+                                valid: progress.valid_count || 0,
+                                invalid: progress.invalid_count || 0,
+                                total: progress.total_emails || 0
+                            }
+                        };
+
+                        displayBulkResults(finalData);
+                        state.validationResults = [];
+
+                        const totalEmails = finalData.total_emails_found || 0;
+                        const newEmails = finalData.new_emails_count || 0;
+                        const validCount = progress.valid_count || 0;
+                        const invalidCount = progress.invalid_count || 0;
+
+                        showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new, ${validCount} valid, ${invalidCount} invalid)`);
                     }, 500);
                 } else {
                     // Update progress bar

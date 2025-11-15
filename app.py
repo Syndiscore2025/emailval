@@ -715,7 +715,12 @@ def stream_job_progress(job_id):
 
             # If job is complete, send final update and close
             if job["status"] in ["completed", "failed"]:
-                yield f"data: {json.dumps({'status': 'done'})}\n\n"
+                # Send final status with complete counts
+                final_data = {
+                    **progress_data,
+                    "status": "done"
+                }
+                yield f"data: {json.dumps(final_data)}\n\n"
                 break
 
             # Wait before next update

@@ -51,19 +51,28 @@ def validate_syntax(email: str) -> Dict[str, Any]:
         errors.append("Email must contain @ symbol")
         return {"valid": False, "errors": errors}
     
+    # Check for multiple @ symbols (must have exactly one)
+    at_count = email.count('@')
+    if at_count > 1:
+        errors.append(f"Email contains {at_count} @ symbols (must have exactly one)")
+        return {"valid": False, "errors": errors}
+
     # Split into local and domain parts
     parts = email.rsplit('@', 1)
     if len(parts) != 2:
         errors.append("Email has invalid format")
         return {"valid": False, "errors": errors}
-    
+
     local_part, domain_part = parts
-    
+
     # Local part checks
     if not local_part:
         errors.append("Local part (before @) is empty")
     elif len(local_part) > 64:
         errors.append("Local part exceeds maximum length of 64 characters")
+    elif '@' in local_part:
+        # Extra safety check (should be caught by count above)
+        errors.append("Local part cannot contain @ symbol")
     
     # Domain part checks
     if not domain_part:
