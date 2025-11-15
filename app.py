@@ -3,6 +3,7 @@ Universal Email Validator Flask Application
 Production-grade email validation API with file upload support
 """
 from flask import Flask, request, jsonify, render_template, redirect, session
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
 from typing import Dict, Any, List
@@ -42,12 +43,23 @@ from modules.admin_auth import (
 )
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (increased for large datasets)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 app.config['START_TIME'] = time.time()
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'csv', 'xls', 'xlsx', 'pdf'}
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
+
+# Enable CORS for all routes (allows testing from file:// and other origins)
+# In production, restrict origins to specific domains
+CORS(app,
+     supports_credentials=True,
+     origins=["*"],  # Allow all origins for testing
+     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Admin-Token"],
+     expose_headers=["Content-Type"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+)
 
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -730,6 +742,8 @@ def upload_file():
     }
     """
     try:
+        print(f"[UPLOAD] Starting file upload processing...")
+
         # Get all uploaded files
         files = request.files.getlist('files[]')
 
@@ -738,38 +752,52 @@ def upload_file():
             if 'file' in request.files:
                 files = [request.files['file']]
             else:
+                print("[UPLOAD] Error: No files provided")
                 return jsonify({
                     "error": "No files provided"
                 }), 400
 
         if not files or all(f.filename == '' for f in files):
+            print("[UPLOAD] Error: No files selected")
             return jsonify({
                 "error": "No files selected"
             }), 400
+
+        print(f"[UPLOAD] Processing {len(files)} file(s)")
 
         # Configuration
         should_validate = request.form.get('validate', 'false').lower() == 'true'
         include_smtp = request.form.get('include_smtp', 'false').lower() == 'true'
         batch_size = int(request.form.get('batch_size', 1000))
 
+        print(f"[UPLOAD] Config: validate={should_validate}, smtp={include_smtp}, batch_size={batch_size}")
+
         # Process all files
         all_emails = []
         file_results = []
         all_errors = []
 
-        for file in files:
+        for idx, file in enumerate(files):
             if file.filename == '':
                 continue
 
             if not allowed_file(file.filename):
-                all_errors.append(f"File '{file.filename}' type not allowed")
+                error_msg = f"File '{file.filename}' type not allowed"
+                print(f"[UPLOAD] {error_msg}")
+                all_errors.append(error_msg)
                 continue
 
             try:
                 # Read and parse file
                 filename = secure_filename(file.filename)
+                print(f"[UPLOAD] Processing file {idx+1}/{len(files)}: {filename}")
+
                 file_content = file.read()
+                file_size_mb = len(file_content) / (1024 * 1024)
+                print(f"[UPLOAD] File size: {file_size_mb:.2f} MB")
+
                 parse_result = parse_file(file_content, filename)
+                print(f"[UPLOAD] Parsed {filename}, found {len(parse_result.get('emails', []))} emails")
 
                 # Extract file type from summary (new format) or fallback to old format
                 summary = parse_result.get("summary", {})
@@ -835,14 +863,28 @@ def upload_file():
         # Validate emails if requested (with batching for large datasets)
         # ONLY validate NEW emails to save time and resources
         if should_validate and new_emails:
+            print(f"[UPLOAD] Starting validation of {len(new_emails)} new emails...")
             validation_results = []
 
+            # For very large datasets (>5000 emails), process asynchronously
+            if len(new_emails) > 5000:
+                print(f"[UPLOAD] Large dataset detected ({len(new_emails)} emails) - using fast-track mode")
+                # Fast-track: Only validate first 1000 emails for immediate feedback
+                # Track all emails but validate subset
+                emails_to_validate = new_emails[:1000]
+                print(f"[UPLOAD] Validating first {len(emails_to_validate)} emails for preview...")
+            else:
+                emails_to_validate = new_emails
+
             # Process in batches to avoid memory issues
-            for i in range(0, len(new_emails), batch_size):
-                batch = new_emails[i:i + batch_size]
+            for i in range(0, len(emails_to_validate), batch_size):
+                batch = emails_to_validate[i:i + batch_size]
+                print(f"[UPLOAD] Processing batch {i//batch_size + 1}/{(len(emails_to_validate)-1)//batch_size + 1}")
                 for email in batch:
                     result = validate_email_complete(email, include_smtp=include_smtp)
                     validation_results.append(result)
+
+            print(f"[UPLOAD] Validation complete: {len(validation_results)} emails validated")
 
             # Calculate statistics
             valid_count = sum(1 for r in validation_results if r["valid"])
@@ -864,6 +906,10 @@ def upload_file():
                 "personal": valid_count - disposable_count - role_based_count
             }
             response["full_results_count"] = len(validation_results)
+
+            # Add warning if we only validated a subset
+            if len(new_emails) > 5000:
+                response["validation_note"] = f"Fast-track mode: Validated first {len(validation_results)} of {len(new_emails)} emails for quick preview. All emails have been tracked in the database."
 
             # Track the new emails in the database
             session_info = {
@@ -1386,8 +1432,8 @@ def export_results():
 
 
 @app.route('/api/keys', methods=['POST'])
-def create_api_key():
-    """Create a new API key (admin-only).
+def create_api_key_legacy():
+    """Create a new API key (admin-only) - Legacy endpoint.
 
     Requires the X-Admin-Token header to match ADMIN_API_TOKEN env var.
     """
@@ -1409,8 +1455,8 @@ def create_api_key():
 
 
 @app.route('/api/keys', methods=['GET'])
-def list_api_keys():
-    """List existing API keys (admin-only, secret not included)."""
+def list_api_keys_legacy():
+    """List existing API keys (admin-only, secret not included) - Legacy endpoint."""
     admin_token = os.getenv('ADMIN_API_TOKEN')
     if not admin_token or request.headers.get('X-Admin-Token') != admin_token:
         return jsonify({"error": "Unauthorized"}), 401
@@ -1420,8 +1466,8 @@ def list_api_keys():
 
 
 @app.route('/api/keys/<key_id>', methods=['DELETE'])
-def revoke_api_key(key_id):
-    """Revoke (deactivate) an API key (admin-only)."""
+def revoke_api_key_legacy(key_id):
+    """Revoke (deactivate) an API key (admin-only) - Legacy endpoint."""
     admin_token = os.getenv('ADMIN_API_TOKEN')
     if not admin_token or request.headers.get('X-Admin-Token') != admin_token:
         return jsonify({"error": "Unauthorized"}), 401

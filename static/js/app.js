@@ -321,16 +321,24 @@ async function uploadFiles() {
     showProgress(0, 'Uploading files...');
 
     try {
+        // Add timeout handling for large files
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
+
         const response = await fetch('/upload', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller.signal
         });
 
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
-            throw new Error('Upload failed');
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || 'Upload failed');
         }
 
-        showProgress(50, 'Processing emails...');
+        showProgress(50, 'Processing emails... (this may take a while for large files)');
 
         const data = await response.json();
 
@@ -344,7 +352,11 @@ async function uploadFiles() {
 
     } catch (error) {
         hideProgress();
-        showError('Upload failed: ' + error.message);
+        if (error.name === 'AbortError') {
+            showError('Upload timed out. The file may be too large or processing is taking too long. Please try a smaller file or contact support.');
+        } else {
+            showError('Upload failed: ' + error.message + '. For large files, this may take several minutes. Please wait and try again.');
+        }
     } finally {
         state.isProcessing = false;
     }
@@ -363,6 +375,16 @@ function displayBulkResults(data) {
     let html = `
         <div class="card">
             <h3 class="card-title">Validation Results</h3>
+
+            <!-- Large File Processing Note -->
+            ${data.validation_note ? `
+                <div class="suggestion-box mb-3" style="background-color: rgba(59, 130, 246, 0.1); border-color: var(--primary);">
+                    <strong style="color: var(--primary);">ℹ️ Large Dataset:</strong><br>
+                    <span style="color: var(--text-primary);">
+                        ${data.validation_note}
+                    </span>
+                </div>
+            ` : ''}
 
             <!-- Deduplication Alert -->
             ${dedupInfo.duplicate_emails_already_in_database > 0 ? `
