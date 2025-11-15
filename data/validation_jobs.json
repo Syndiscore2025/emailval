@@ -1,0 +1,21 @@
+{
+  "90618fc9": {
+    "job_id": "90618fc9",
+    "status": "completed",
+    "total_emails": 207,
+    "validated_count": 207,
+    "valid_count": 192,
+    "invalid_count": 15,
+    "started_at": "2025-11-15T07:28:55.868044",
+    "completed_at": "2025-11-15T07:29:13.210332",
+    "session_info": {
+      "files_processed": 1,
+      "filenames": [
+        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
+      ],
+      "include_smtp": true
+    },
+    "webhook_url": null,
+    "error": null
+  }
+}

@@ -45,6 +45,70 @@ from modules.admin_auth import (
 )
 
 app = Flask(__name__)
+
+
+def run_smtp_validation_background(job_id, emails_to_validate, tracker):
+    """Run SMTP validation in background thread"""
+    job_tracker = get_job_tracker()
+    validation_results = []
+
+    try:
+        print(f"[BACKGROUND] Starting SMTP validation for job {job_id} with {len(emails_to_validate)} emails")
+
+        # First do syntax, domain, and type checks (fast)
+        for email in emails_to_validate:
+            result = validate_email_complete(email, include_smtp=False)
+            validation_results.append(result)
+
+        # Progress callback for SMTP validation
+        def progress_callback(completed, total):
+            # Count valid/invalid from completed results
+            valid = sum(1 for r in validation_results if r.get('valid', False))
+            invalid = completed - valid
+            job_tracker.update_progress(job_id, completed, valid, invalid)
+            print(f"[BACKGROUND] SMTP Progress: {completed}/{total} ({(completed/total)*100:.1f}%)")
+
+        # Then do SMTP checks in parallel with progress tracking
+        print(f"[BACKGROUND] Running parallel SMTP checks with 50 concurrent connections...")
+        smtp_results = validate_smtp_batch_with_progress(
+            emails_to_validate,
+            max_workers=50,
+            timeout=3,
+            progress_callback=progress_callback
+        )
+        print(f"[BACKGROUND] SMTP batch complete, got {len(smtp_results)} results")
+
+        # Merge SMTP results into validation results
+        for i, result in enumerate(validation_results):
+            email = result['email']
+            if email in smtp_results:
+                smtp_data = smtp_results[email]
+                result['checks']['smtp'] = {
+                    'valid': smtp_data.get('valid', False),
+                    'mailbox_exists': smtp_data.get('mailbox_exists', False),
+                    'smtp_response': smtp_data.get('smtp_response', ''),
+                    'errors': smtp_data.get('errors', []),
+                    'skipped': smtp_data.get('skipped', False)
+                }
+                # Update overall validity based on SMTP
+                if not smtp_data.get('skipped', False):
+                    result['valid'] = result['valid'] and smtp_data.get('valid', False)
+
+        print(f"[BACKGROUND] Parallel SMTP validation complete for job {job_id}")
+
+        # Save results to database
+        session_info = {"job_id": job_id}
+        tracker.track_emails(emails_to_validate, validation_results, session_info)
+
+        # Mark job as complete
+        job_tracker.complete_job(job_id, success=True)
+        print(f"[BACKGROUND] Job {job_id} completed successfully")
+
+    except Exception as smtp_error:
+        print(f"[BACKGROUND] SMTP validation error for job {job_id}: {smtp_error}")
+        import traceback
+        print(traceback.format_exc())
+        job_tracker.complete_job(job_id, success=False, error=str(smtp_error))
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (increased for large datasets)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
@@ -966,57 +1030,27 @@ def upload_file():
 
             # SMTP validation uses parallel processing for speed
             if include_smtp:
-                print(f"[UPLOAD] Using parallel SMTP validation for {len(emails_to_validate)} emails...")
+                print(f"[UPLOAD] Starting background SMTP validation for {len(emails_to_validate)} emails...")
                 print(f"[UPLOAD] Sample emails to validate: {emails_to_validate[:3]}")
 
-                try:
-                    # First do syntax, domain, and type checks (fast)
-                    for email in emails_to_validate:
-                        result = validate_email_complete(email, include_smtp=False)
-                        validation_results.append(result)
+                # Start SMTP validation in background thread
+                thread = threading.Thread(
+                    target=run_smtp_validation_background,
+                    args=(job_id, emails_to_validate, tracker),
+                    daemon=True
+                )
+                thread.start()
+                print(f"[UPLOAD] Background validation started for job {job_id}")
 
-                    # Progress callback for SMTP validation
-                    def progress_callback(completed, total):
-                        # Count valid/invalid from completed results
-                        valid = sum(1 for r in validation_results if r.get('valid', False))
-                        invalid = completed - valid
-                        job_tracker.update_progress(job_id, completed, valid, invalid)
-                        print(f"[UPLOAD] SMTP Progress: {completed}/{total} ({(completed/total)*100:.1f}%)")
+                # Return immediately with job_id - client will stream progress via SSE
+                response["message"] = "SMTP validation started in background"
+                response["validation_status"] = "in_progress"
+                response["total_emails_found"] = total_emails
+                response["new_emails_count"] = len(new_emails)
+                response["duplicate_emails_count"] = len(duplicate_emails)
 
-                    # Then do SMTP checks in parallel with progress tracking
-                    print(f"[UPLOAD] Running parallel SMTP checks with 50 concurrent connections...")
-                    smtp_results = validate_smtp_batch_with_progress(
-                        emails_to_validate,
-                        max_workers=50,
-                        timeout=3,
-                        progress_callback=progress_callback
-                    )
-                    print(f"[UPLOAD] SMTP batch complete, got {len(smtp_results)} results")
-
-                    # Merge SMTP results into validation results
-                    for i, result in enumerate(validation_results):
-                        email = result['email']
-                        if email in smtp_results:
-                            smtp_data = smtp_results[email]
-                            result['checks']['smtp'] = {
-                                'valid': smtp_data.get('valid', False),
-                                'mailbox_exists': smtp_data.get('mailbox_exists', False),
-                                'smtp_response': smtp_data.get('smtp_response', ''),
-                                'errors': smtp_data.get('errors', []),
-                                'skipped': smtp_data.get('skipped', False)
-                            }
-                            # Update overall validity based on SMTP
-                            if not smtp_data.get('skipped', False):
-                                result['valid'] = result['valid'] and smtp_data.get('valid', False)
-
-                    print(f"[UPLOAD] Parallel SMTP validation complete")
-                    job_tracker.complete_job(job_id, success=True)
-                except Exception as smtp_error:
-                    print(f"[UPLOAD] SMTP validation error: {smtp_error}")
-                    import traceback
-                    print(traceback.format_exc())
-                    job_tracker.complete_job(job_id, success=False, error=str(smtp_error))
-                    response["smtp_error"] = f"SMTP validation failed: {str(smtp_error)}"
+                # Return early - validation happening in background
+                return jsonify(response), 200
             else:
                 # Non-SMTP validation (fast, sequential is fine)
                 for i in range(0, len(emails_to_validate), batch_size):
