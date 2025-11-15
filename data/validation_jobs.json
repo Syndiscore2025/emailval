@@ -266,5 +266,27 @@
     },
     "webhook_url": null,
     "error": null
+  },
+  "7af46d42": {
+    "job_id": "7af46d42",
+    "status": "running",
+    "total_emails": 6054,
+    "validated_count": 0,
+    "valid_count": 0,
+    "invalid_count": 0,
+    "disposable_count": 0,
+    "role_based_count": 0,
+    "personal_count": 0,
+    "started_at": "2025-11-15T11:48:39.034977",
+    "completed_at": null,
+    "session_info": {
+      "files_processed": 1,
+      "filenames": [
+        "3359clean_3359-clean.xlsx"
+      ],
+      "include_smtp": true
+    },
+    "webhook_url": null,
+    "error": null
   }
 }
