@@ -36,7 +36,7 @@ class JobTracker:
     def create_job(self, total_emails: int, session_info: Dict[str, Any] = None) -> str:
         """Create a new validation job"""
         job_id = str(uuid.uuid4())[:8]
-        
+
         with self.lock:
             self.jobs[job_id] = {
                 "job_id": job_id,
@@ -45,6 +45,9 @@ class JobTracker:
                 "validated_count": 0,
                 "valid_count": 0,
                 "invalid_count": 0,
+                "disposable_count": 0,
+                "role_based_count": 0,
+                "personal_count": 0,
                 "started_at": datetime.now().isoformat(),
                 "completed_at": None,
                 "session_info": session_info or {},
@@ -52,11 +55,12 @@ class JobTracker:
                 "error": None
             }
             self._save_jobs()
-        
+
         return job_id
     
-    def update_progress(self, job_id: str, validated_count: int, valid_count: int = None, invalid_count: int = None):
-        """Update job progress"""
+    def update_progress(self, job_id: str, validated_count: int, valid_count: int = None, invalid_count: int = None,
+                       disposable_count: int = None, role_based_count: int = None, personal_count: int = None):
+        """Update job progress with detailed stats"""
         with self.lock:
             if job_id in self.jobs:
                 self.jobs[job_id]["validated_count"] = validated_count
@@ -64,6 +68,12 @@ class JobTracker:
                     self.jobs[job_id]["valid_count"] = valid_count
                 if invalid_count is not None:
                     self.jobs[job_id]["invalid_count"] = invalid_count
+                if disposable_count is not None:
+                    self.jobs[job_id]["disposable_count"] = disposable_count
+                if role_based_count is not None:
+                    self.jobs[job_id]["role_based_count"] = role_based_count
+                if personal_count is not None:
+                    self.jobs[job_id]["personal_count"] = personal_count
                 if self.jobs[job_id]["status"] == "pending":
                     self.jobs[job_id]["status"] = "running"
                 self._save_jobs()

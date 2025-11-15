@@ -53,20 +53,36 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
     validation_results = []
 
     try:
-        print(f"[BACKGROUND] Starting SMTP validation for job {job_id} with {len(emails_to_validate)} emails")
+        print(f"[BACKGROUND] ========================================")
+        print(f"[BACKGROUND] Thread started for job {job_id}")
+        print(f"[BACKGROUND] Total emails to validate: {len(emails_to_validate)}")
+        print(f"[BACKGROUND] ========================================")
 
         # First do syntax, domain, and type checks (fast)
-        for email in emails_to_validate:
+        print(f"[BACKGROUND] Step 1: Running syntax/domain/type checks...")
+        for i, email in enumerate(emails_to_validate):
             result = validate_email_complete(email, include_smtp=False)
             validation_results.append(result)
+            if (i + 1) % 100 == 0:
+                print(f"[BACKGROUND] Processed {i + 1}/{len(emails_to_validate)} syntax checks...")
+
+        print(f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated")
 
         # Progress callback for SMTP validation
         def progress_callback(completed, total):
             # Count valid/invalid from completed results
             valid = sum(1 for r in validation_results if r.get('valid', False))
             invalid = completed - valid
-            job_tracker.update_progress(job_id, completed, valid, invalid)
-            print(f"[BACKGROUND] SMTP Progress: {completed}/{total} ({(completed/total)*100:.1f}%)")
+
+            # Count detailed stats
+            disposable = sum(1 for r in validation_results
+                           if r.get("checks", {}).get("type", {}).get("is_disposable", False))
+            role_based = sum(1 for r in validation_results
+                           if r.get("checks", {}).get("type", {}).get("is_role_based", False))
+            personal = valid - disposable - role_based
+
+            job_tracker.update_progress(job_id, completed, valid, invalid, disposable, role_based, personal)
+            print(f"[BACKGROUND] SMTP Progress: {completed}/{total} ({(completed/total)*100:.1f}%) - Valid: {valid}, Invalid: {invalid}")
 
         # Then do SMTP checks in parallel with progress tracking
         print(f"[BACKGROUND] Running parallel SMTP checks with 50 concurrent connections...")
@@ -109,6 +125,9 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
         import traceback
         print(traceback.format_exc())
         job_tracker.complete_job(job_id, success=False, error=str(smtp_error))
+
+
+# Flask app configuration
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (increased for large datasets)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
@@ -707,6 +726,9 @@ def stream_job_progress(job_id):
                 "total_emails": job["total_emails"],
                 "valid_count": job["valid_count"],
                 "invalid_count": job["invalid_count"],
+                "disposable_count": job.get("disposable_count", 0),
+                "role_based_count": job.get("role_based_count", 0),
+                "personal_count": job.get("personal_count", 0),
                 "progress_percent": job_tracker.get_progress_percent(job_id),
                 "time_remaining_seconds": job_tracker.estimate_time_remaining(job_id)
             }
@@ -1033,19 +1055,31 @@ def upload_file():
 
             print(f"[UPLOAD] Created job {job_id} for {len(emails_to_validate)} emails (SMTP: {include_smtp})")
 
+            # Initialize progress to 0 to show job has started
+            job_tracker.update_progress(job_id, 0, 0, 0, 0, 0, 0)
+
             # SMTP validation uses parallel processing for speed
             if include_smtp:
                 print(f"[UPLOAD] Starting background SMTP validation for {len(emails_to_validate)} emails...")
                 print(f"[UPLOAD] Sample emails to validate: {emails_to_validate[:3]}")
 
                 # Start SMTP validation in background thread
+                def thread_wrapper():
+                    try:
+                        run_smtp_validation_background(job_id, emails_to_validate, tracker)
+                    except Exception as e:
+                        print(f"[UPLOAD] CRITICAL ERROR in background thread: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        job_tracker.complete_job(job_id, success=False, error=str(e))
+
                 thread = threading.Thread(
-                    target=run_smtp_validation_background,
-                    args=(job_id, emails_to_validate, tracker),
+                    target=thread_wrapper,
                     daemon=True
                 )
                 thread.start()
-                print(f"[UPLOAD] Background validation started for job {job_id}")
+                print(f"[UPLOAD] Background validation thread started for job {job_id}")
+                print(f"[UPLOAD] Thread is alive: {thread.is_alive()}")
 
                 # Return immediately with job_id - client will stream progress via SSE
                 response["message"] = "SMTP validation started in background"
@@ -1063,11 +1097,16 @@ def upload_file():
                         result = validate_email_complete(email, include_smtp=False)
                         validation_results.append(result)
 
-                    # Update progress
+                    # Update progress with detailed stats
                     completed = len(validation_results)
                     valid = sum(1 for r in validation_results if r.get('valid', False))
                     invalid = completed - valid
-                    job_tracker.update_progress(job_id, completed, valid, invalid)
+                    disposable = sum(1 for r in validation_results
+                                   if r.get("checks", {}).get("type", {}).get("is_disposable", False))
+                    role_based = sum(1 for r in validation_results
+                                   if r.get("checks", {}).get("type", {}).get("is_role_based", False))
+                    personal = valid - disposable - role_based
+                    job_tracker.update_progress(job_id, completed, valid, invalid, disposable, role_based, personal)
 
                 # Mark job as complete
                 job_tracker.complete_job(job_id, success=True)

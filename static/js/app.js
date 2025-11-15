@@ -335,19 +335,25 @@ async function uploadFiles() {
         const data = await response.json();
         const jobId = data.job_id;
 
+        console.log('[UPLOAD] Response data:', data);
+        console.log('[UPLOAD] Job ID:', jobId);
+
         // If there's a job_id, stream progress updates
         if (jobId) {
             showProgress(5, 'Starting validation...');
 
             // Connect to SSE stream for real-time progress
             const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+            console.log('[SSE] Connecting to:', `/api/jobs/${jobId}/stream`);
 
             eventSource.onmessage = async function(event) {
                 const progress = JSON.parse(event.data);
+                console.log('[SSE] Message received:', progress);
 
                 if (progress.status === 'done') {
                     eventSource.close();
                     showProgress(100, 'Complete!');
+                    console.log('[SSE] Validation complete with final stats:', progress);
 
                     setTimeout(() => {
                         hideProgress();
@@ -358,10 +364,14 @@ async function uploadFiles() {
                             validation_summary: {
                                 valid: progress.valid_count || 0,
                                 invalid: progress.invalid_count || 0,
-                                total: progress.total_emails || 0
+                                total: progress.total_emails || 0,
+                                disposable: progress.disposable_count || 0,
+                                role_based: progress.role_based_count || 0,
+                                personal: progress.personal_count || 0
                             }
                         };
 
+                        console.log('[SSE] Final data:', finalData);
                         displayBulkResults(finalData);
                         state.validationResults = [];
 
@@ -373,35 +383,48 @@ async function uploadFiles() {
                         showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new, ${validCount} valid, ${invalidCount} invalid)`);
                     }, 500);
                 } else {
-                    // Update progress bar
+                    // Update progress bar with real-time stats
                     const percent = progress.progress_percent || 0;
                     const validated = progress.validated_count || 0;
                     const total = progress.total_emails || 0;
+                    const validCount = progress.valid_count || 0;
+                    const invalidCount = progress.invalid_count || 0;
+                    const disposableCount = progress.disposable_count || 0;
                     const timeRemaining = progress.time_remaining_seconds || 0;
 
                     let message = `Validating ${validated} / ${total} emails (${percent.toFixed(1)}%)`;
                     if (timeRemaining > 0) {
                         const minutes = Math.floor(timeRemaining / 60);
-                        const seconds = timeRemaining % 60;
+                        const seconds = Math.floor(timeRemaining % 60);
                         message += ` - ${minutes}m ${seconds}s remaining`;
                     }
 
-                    showProgress(percent, message);
+                    const stats = {
+                        valid: validCount,
+                        invalid: invalidCount,
+                        disposable: disposableCount
+                    };
+
+                    console.log('[SSE] Progress update:', { percent, validated, total, stats });
+                    showProgress(percent, message, stats);
                 }
             };
 
             eventSource.onerror = function(error) {
-                console.error('SSE error:', error);
+                console.error('[SSE] Error occurred:', error);
+                console.error('[SSE] EventSource readyState:', eventSource.readyState);
                 eventSource.close();
                 // Fall back to showing completion
                 showProgress(100, 'Complete!');
                 setTimeout(() => {
                     hideProgress();
+                    console.log('[SSE] Falling back to initial data:', data);
                     displayBulkResults(data);
                 }, 500);
             };
         } else {
             // No job tracking, show completion immediately
+            console.log('[UPLOAD] No job_id, showing results immediately');
             showProgress(100, 'Complete!');
             setTimeout(() => {
                 hideProgress();
@@ -600,21 +623,36 @@ async function exportResults() {
 }
 
 // Progress bar functions
-function showProgress(percent, message) {
+function showProgress(percent, message, stats = null) {
     const container = document.getElementById('progressContainer');
     const fill = document.getElementById('progressFill');
     const text = document.getElementById('progressText');
 
     if (container) {
         container.classList.add('active');
+        container.classList.remove('hidden');
     }
 
     if (fill) {
         fill.style.width = percent + '%';
+        // Add smooth transition
+        fill.style.transition = 'width 0.3s ease-in-out';
     }
 
     if (text) {
-        text.textContent = message || `${percent}%`;
+        if (stats) {
+            // Enhanced progress display with stats
+            text.innerHTML = `
+                <div style="font-weight: 600; margin-bottom: 4px;">${message}</div>
+                <div style="font-size: 0.85em; opacity: 0.9;">
+                    <span style="color: var(--success); margin-right: 12px;">✓ ${stats.valid || 0} valid</span>
+                    <span style="color: var(--error); margin-right: 12px;">✗ ${stats.invalid || 0} invalid</span>
+                    ${stats.disposable ? `<span style="color: var(--warning); margin-right: 12px;">⚠ ${stats.disposable} disposable</span>` : ''}
+                </div>
+            `;
+        } else {
+            text.textContent = message || `${percent}%`;
+        }
     }
 }
 
@@ -622,6 +660,10 @@ function hideProgress() {
     const container = document.getElementById('progressContainer');
     if (container) {
         container.classList.remove('active');
+        // Delay hiding to allow final message to be seen
+        setTimeout(() => {
+            container.classList.add('hidden');
+        }, 300);
     }
 }
 
