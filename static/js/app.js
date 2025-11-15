@@ -321,39 +321,79 @@ async function uploadFiles() {
     showProgress(0, 'Uploading files...');
 
     try {
-        // Add timeout handling for large files
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
-
+        // Upload files and get job_id
         const response = await fetch('/upload', {
             method: 'POST',
-            body: formData,
-            signal: controller.signal
+            body: formData
         });
-
-        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.error || 'Upload failed');
         }
 
-        showProgress(50, 'Processing emails... (this may take a while for large files)');
-
         const data = await response.json();
+        const jobId = data.job_id;
 
-        showProgress(100, 'Complete!');
+        // If there's a job_id, stream progress updates
+        if (jobId) {
+            showProgress(5, 'Starting validation...');
 
-        setTimeout(() => {
-            hideProgress();
-            displayBulkResults(data);
-            state.validationResults = data.validation_results || [];
+            // Connect to SSE stream for real-time progress
+            const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
 
-            // Show success message
-            const totalEmails = data.total_emails_found || 0;
-            const newEmails = data.new_emails_count || 0;
-            showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new)`);
-        }, 500);
+            eventSource.onmessage = function(event) {
+                const progress = JSON.parse(event.data);
+
+                if (progress.status === 'done') {
+                    eventSource.close();
+                    showProgress(100, 'Complete!');
+
+                    setTimeout(() => {
+                        hideProgress();
+                        displayBulkResults(data);
+                        state.validationResults = data.validation_results || [];
+
+                        const totalEmails = data.total_emails_found || 0;
+                        const newEmails = data.new_emails_count || 0;
+                        showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new)`);
+                    }, 500);
+                } else {
+                    // Update progress bar
+                    const percent = progress.progress_percent || 0;
+                    const validated = progress.validated_count || 0;
+                    const total = progress.total_emails || 0;
+                    const timeRemaining = progress.time_remaining_seconds || 0;
+
+                    let message = `Validating ${validated} / ${total} emails (${percent.toFixed(1)}%)`;
+                    if (timeRemaining > 0) {
+                        const minutes = Math.floor(timeRemaining / 60);
+                        const seconds = timeRemaining % 60;
+                        message += ` - ${minutes}m ${seconds}s remaining`;
+                    }
+
+                    showProgress(percent, message);
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                console.error('SSE error:', error);
+                eventSource.close();
+                // Fall back to showing completion
+                showProgress(100, 'Complete!');
+                setTimeout(() => {
+                    hideProgress();
+                    displayBulkResults(data);
+                }, 500);
+            };
+        } else {
+            // No job tracking, show completion immediately
+            showProgress(100, 'Complete!');
+            setTimeout(() => {
+                hideProgress();
+                displayBulkResults(data);
+            }, 500);
+        }
 
     } catch (error) {
         hideProgress();

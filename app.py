@@ -30,10 +30,11 @@ from modules.syntax_check import validate_syntax
 from modules.domain_check import validate_domain
 from modules.type_check import validate_type
 from modules.smtp_check import validate_smtp
-from modules.smtp_check_async import validate_smtp_batch
+from modules.smtp_check_async import validate_smtp_batch, validate_smtp_batch_with_progress
 from modules.file_parser import parse_file
 from modules.utils import normalize_email, create_validation_result, calculate_deliverability_score, get_deliverability_rating
 from modules.email_tracker import get_tracker
+from modules.job_tracker import get_job_tracker
 from modules.api_auth import require_api_key, get_key_manager
 from modules.crm_adapter import parse_crm_request, build_crm_response, get_crm_event_type, validate_crm_vendor
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
@@ -596,6 +597,76 @@ def health():
     }), 200
 
 
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+@require_api_key
+def get_job_status(job_id):
+    """Get validation job status and progress"""
+    job_tracker = get_job_tracker()
+    job = job_tracker.get_job(job_id)
+
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    # Add calculated fields
+    job["progress_percent"] = job_tracker.get_progress_percent(job_id)
+    job["time_remaining_seconds"] = job_tracker.estimate_time_remaining(job_id)
+
+    return jsonify(job), 200
+
+
+@app.route('/api/jobs/<job_id>/stream', methods=['GET'])
+@require_api_key
+def stream_job_progress(job_id):
+    """Server-Sent Events stream for real-time job progress"""
+    from flask import Response, stream_with_context
+    import time
+
+    job_tracker = get_job_tracker()
+    job = job_tracker.get_job(job_id)
+
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    def generate():
+        """Generate SSE events"""
+        while True:
+            job = job_tracker.get_job(job_id)
+            if not job:
+                yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+                break
+
+            # Send progress update
+            progress_data = {
+                "job_id": job_id,
+                "status": job["status"],
+                "validated_count": job["validated_count"],
+                "total_emails": job["total_emails"],
+                "valid_count": job["valid_count"],
+                "invalid_count": job["invalid_count"],
+                "progress_percent": job_tracker.get_progress_percent(job_id),
+                "time_remaining_seconds": job_tracker.estimate_time_remaining(job_id)
+            }
+
+            yield f"data: {json.dumps(progress_data)}\n\n"
+
+            # If job is complete, send final update and close
+            if job["status"] in ["completed", "failed"]:
+                yield f"data: {json.dumps({'status': 'done'})}\n\n"
+                break
+
+            # Wait before next update
+            time.sleep(1)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
 @app.route('/validate', methods=['POST'])
 @require_api_key
 def validate_single():
@@ -876,24 +947,22 @@ def upload_file():
             print(f"[UPLOAD] SMTP validation: {include_smtp}")
             validation_results = []
 
-            # Determine how many emails to validate
-            if include_smtp:
-                # SMTP validation with async/parallel processing
-                # Can now handle much larger datasets (500 emails in ~30 seconds vs 25 minutes)
-                if len(new_emails) > 500:
-                    print(f"[UPLOAD] SMTP validation requested for {len(new_emails)} emails - limiting to first 500")
-                    emails_to_validate = new_emails[:500]
-                    response["smtp_warning"] = f"SMTP validation limited to first 500 of {len(new_emails)} emails for performance. All emails tracked."
-                else:
-                    emails_to_validate = new_emails
-            else:
-                # For non-SMTP validation, use fast-track mode for large datasets
-                if len(new_emails) > 5000:
-                    print(f"[UPLOAD] Large dataset detected ({len(new_emails)} emails) - using fast-track mode")
-                    emails_to_validate = new_emails[:1000]
-                    print(f"[UPLOAD] Validating first {len(emails_to_validate)} emails for preview...")
-                else:
-                    emails_to_validate = new_emails
+            # Validate ALL emails (no limits!)
+            emails_to_validate = new_emails
+
+            # Create job for progress tracking
+            job_tracker = get_job_tracker()
+            job_id = job_tracker.create_job(
+                total_emails=len(emails_to_validate),
+                session_info={
+                    "files_processed": len(file_results),
+                    "filenames": [f["filename"] for f in file_results],
+                    "include_smtp": include_smtp
+                }
+            )
+            response["job_id"] = job_id
+
+            print(f"[UPLOAD] Created job {job_id} for {len(emails_to_validate)} emails (SMTP: {include_smtp})")
 
             # SMTP validation uses parallel processing for speed
             if include_smtp:
@@ -906,9 +975,22 @@ def upload_file():
                         result = validate_email_complete(email, include_smtp=False)
                         validation_results.append(result)
 
-                    # Then do SMTP checks in parallel (slow but parallelized)
-                    print(f"[UPLOAD] Running parallel SMTP checks with 20 concurrent connections...")
-                    smtp_results = validate_smtp_batch(emails_to_validate, max_workers=20, timeout=5)
+                    # Progress callback for SMTP validation
+                    def progress_callback(completed, total):
+                        # Count valid/invalid from completed results
+                        valid = sum(1 for r in validation_results if r.get('valid', False))
+                        invalid = completed - valid
+                        job_tracker.update_progress(job_id, completed, valid, invalid)
+                        print(f"[UPLOAD] SMTP Progress: {completed}/{total} ({(completed/total)*100:.1f}%)")
+
+                    # Then do SMTP checks in parallel with progress tracking
+                    print(f"[UPLOAD] Running parallel SMTP checks with 50 concurrent connections...")
+                    smtp_results = validate_smtp_batch_with_progress(
+                        emails_to_validate,
+                        max_workers=50,
+                        timeout=3,
+                        progress_callback=progress_callback
+                    )
                     print(f"[UPLOAD] SMTP batch complete, got {len(smtp_results)} results")
 
                     # Merge SMTP results into validation results
@@ -928,11 +1010,12 @@ def upload_file():
                                 result['valid'] = result['valid'] and smtp_data.get('valid', False)
 
                     print(f"[UPLOAD] Parallel SMTP validation complete")
+                    job_tracker.complete_job(job_id, success=True)
                 except Exception as smtp_error:
                     print(f"[UPLOAD] SMTP validation error: {smtp_error}")
                     import traceback
                     print(traceback.format_exc())
-                    # Continue without SMTP validation
+                    job_tracker.complete_job(job_id, success=False, error=str(smtp_error))
                     response["smtp_error"] = f"SMTP validation failed: {str(smtp_error)}"
             else:
                 # Non-SMTP validation (fast, sequential is fine)
@@ -942,6 +1025,15 @@ def upload_file():
                     for email in batch:
                         result = validate_email_complete(email, include_smtp=False)
                         validation_results.append(result)
+
+                    # Update progress
+                    completed = len(validation_results)
+                    valid = sum(1 for r in validation_results if r.get('valid', False))
+                    invalid = completed - valid
+                    job_tracker.update_progress(job_id, completed, valid, invalid)
+
+                # Mark job as complete
+                job_tracker.complete_job(job_id, success=True)
 
             print(f"[UPLOAD] Validation complete: {len(validation_results)} emails validated")
 
@@ -965,10 +1057,6 @@ def upload_file():
                 "personal": valid_count - disposable_count - role_based_count
             }
             response["full_results_count"] = len(validation_results)
-
-            # Add warning if we only validated a subset
-            if len(new_emails) > 5000:
-                response["validation_note"] = f"Fast-track mode: Validated first {len(validation_results)} of {len(new_emails)} emails for quick preview. All emails have been tracked in the database."
 
             # Track the new emails in the database
             session_info = {

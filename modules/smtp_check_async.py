@@ -12,15 +12,15 @@ from .utils import extract_domain
 from .domain_check import validate_domain
 
 
-def validate_smtp_single(email: str, timeout: int = 5, sender: Optional[str] = None) -> Dict[str, Any]:
+def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = None) -> Dict[str, Any]:
     """
     Verify single email mailbox existence via SMTP (optimized version)
-    
+
     Args:
         email: Email address to validate
-        timeout: SMTP connection timeout in seconds (reduced from 10 to 5)
+        timeout: SMTP connection timeout in seconds (reduced to 3s for speed)
         sender: Email address to use as sender
-        
+
     Returns:
         Dictionary with validation results
     """
@@ -92,21 +92,21 @@ def validate_smtp_single(email: str, timeout: int = 5, sender: Optional[str] = N
     }
 
 
-def validate_smtp_batch(emails: List[str], max_workers: int = 20, timeout: int = 5, 
+def validate_smtp_batch(emails: List[str], max_workers: int = 50, timeout: int = 3,
                        sender: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """
     Validate multiple emails concurrently using thread pool
-    
+
     This is MUCH faster than sequential validation:
     - Sequential: 100 emails × 3 seconds = 5 minutes
-    - Parallel (20 workers): 100 emails ÷ 20 × 3 seconds = 15 seconds
-    
+    - Parallel (50 workers): 100 emails ÷ 50 × 3 seconds = 6 seconds
+
     Args:
         emails: List of email addresses to validate
-        max_workers: Number of concurrent SMTP connections (default: 20)
-        timeout: SMTP connection timeout per email (default: 5 seconds)
+        max_workers: Number of concurrent SMTP connections (default: 50, increased from 20)
+        timeout: SMTP connection timeout per email (default: 3 seconds, reduced from 5)
         sender: Email address to use as sender
-        
+
     Returns:
         Dictionary mapping email -> validation result
     """
@@ -140,19 +140,19 @@ def validate_smtp_batch(emails: List[str], max_workers: int = 20, timeout: int =
     return results
 
 
-def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 20, 
-                                      timeout: int = 5, sender: Optional[str] = None,
+def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
+                                      timeout: int = 3, sender: Optional[str] = None,
                                       progress_callback=None) -> Dict[str, Dict[str, Any]]:
     """
     Validate multiple emails concurrently with progress tracking
-    
+
     Args:
         emails: List of email addresses to validate
-        max_workers: Number of concurrent SMTP connections
-        timeout: SMTP connection timeout per email
+        max_workers: Number of concurrent SMTP connections (default: 50)
+        timeout: SMTP connection timeout per email (default: 3s)
         sender: Email address to use as sender
         progress_callback: Optional function(completed, total) to track progress
-        
+
     Returns:
         Dictionary mapping email -> validation result
     """
