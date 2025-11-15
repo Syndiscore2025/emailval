@@ -348,14 +348,19 @@ async function uploadFiles() {
             hideProgress();
             displayBulkResults(data);
             state.validationResults = data.validation_results || [];
+
+            // Show success message
+            const totalEmails = data.total_emails_found || 0;
+            const newEmails = data.new_emails_count || 0;
+            showSuccess(`Upload complete! Found ${totalEmails} emails (${newEmails} new)`);
         }, 500);
 
     } catch (error) {
         hideProgress();
         if (error.name === 'AbortError') {
-            showError('Upload timed out. The file may be too large or processing is taking too long. Please try a smaller file or contact support.');
+            showError('Upload timed out. The file may be too large. Please try a smaller file or contact support.');
         } else {
-            showError('Upload failed: ' + error.message + '. For large files, this may take several minutes. Please wait and try again.');
+            showError('Upload failed: ' + error.message);
         }
     } finally {
         state.isProcessing = false;
@@ -576,7 +581,11 @@ function showLoading(containerId) {
 }
 
 function showError(message) {
-    alert(message); // Simple alert for now, can be enhanced with custom modal
+    alert(message);
+}
+
+function showSuccess(message) {
+    alert(message);
 }
 
 function escapeHtml(text) {

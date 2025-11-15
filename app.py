@@ -30,6 +30,7 @@ from modules.syntax_check import validate_syntax
 from modules.domain_check import validate_domain
 from modules.type_check import validate_type
 from modules.smtp_check import validate_smtp
+from modules.smtp_check_async import validate_smtp_batch
 from modules.file_parser import parse_file
 from modules.utils import normalize_email, create_validation_result, calculate_deliverability_score, get_deliverability_rating
 from modules.email_tracker import get_tracker
@@ -876,25 +877,66 @@ def upload_file():
         # ONLY validate NEW emails to save time and resources
         if should_validate and new_emails:
             print(f"[UPLOAD] Starting validation of {len(new_emails)} new emails...")
+            print(f"[UPLOAD] SMTP validation: {include_smtp}")
             validation_results = []
 
-            # For very large datasets (>5000 emails), process asynchronously
-            if len(new_emails) > 5000:
-                print(f"[UPLOAD] Large dataset detected ({len(new_emails)} emails) - using fast-track mode")
-                # Fast-track: Only validate first 1000 emails for immediate feedback
-                # Track all emails but validate subset
-                emails_to_validate = new_emails[:1000]
-                print(f"[UPLOAD] Validating first {len(emails_to_validate)} emails for preview...")
+            # Determine how many emails to validate
+            if include_smtp:
+                # SMTP validation with async/parallel processing
+                # Can now handle much larger datasets (500 emails in ~30 seconds vs 25 minutes)
+                if len(new_emails) > 500:
+                    print(f"[UPLOAD] SMTP validation requested for {len(new_emails)} emails - limiting to first 500")
+                    emails_to_validate = new_emails[:500]
+                    response["smtp_warning"] = f"SMTP validation limited to first 500 of {len(new_emails)} emails for performance. All emails tracked."
+                else:
+                    emails_to_validate = new_emails
             else:
-                emails_to_validate = new_emails
+                # For non-SMTP validation, use fast-track mode for large datasets
+                if len(new_emails) > 5000:
+                    print(f"[UPLOAD] Large dataset detected ({len(new_emails)} emails) - using fast-track mode")
+                    emails_to_validate = new_emails[:1000]
+                    print(f"[UPLOAD] Validating first {len(emails_to_validate)} emails for preview...")
+                else:
+                    emails_to_validate = new_emails
 
-            # Process in batches to avoid memory issues
-            for i in range(0, len(emails_to_validate), batch_size):
-                batch = emails_to_validate[i:i + batch_size]
-                print(f"[UPLOAD] Processing batch {i//batch_size + 1}/{(len(emails_to_validate)-1)//batch_size + 1}")
-                for email in batch:
-                    result = validate_email_complete(email, include_smtp=include_smtp)
+            # SMTP validation uses parallel processing for speed
+            if include_smtp:
+                print(f"[UPLOAD] Using parallel SMTP validation for {len(emails_to_validate)} emails...")
+
+                # First do syntax, domain, and type checks (fast)
+                for email in emails_to_validate:
+                    result = validate_email_complete(email, include_smtp=False)
                     validation_results.append(result)
+
+                # Then do SMTP checks in parallel (slow but parallelized)
+                print(f"[UPLOAD] Running parallel SMTP checks with 20 concurrent connections...")
+                smtp_results = validate_smtp_batch(emails_to_validate, max_workers=20, timeout=5)
+
+                # Merge SMTP results into validation results
+                for i, result in enumerate(validation_results):
+                    email = result['email']
+                    if email in smtp_results:
+                        smtp_data = smtp_results[email]
+                        result['checks']['smtp'] = {
+                            'valid': smtp_data.get('valid', False),
+                            'mailbox_exists': smtp_data.get('mailbox_exists', False),
+                            'smtp_response': smtp_data.get('smtp_response', ''),
+                            'errors': smtp_data.get('errors', []),
+                            'skipped': smtp_data.get('skipped', False)
+                        }
+                        # Update overall validity based on SMTP
+                        if not smtp_data.get('skipped', False):
+                            result['valid'] = result['valid'] and smtp_data.get('valid', False)
+
+                print(f"[UPLOAD] Parallel SMTP validation complete")
+            else:
+                # Non-SMTP validation (fast, sequential is fine)
+                for i in range(0, len(emails_to_validate), batch_size):
+                    batch = emails_to_validate[i:i + batch_size]
+                    print(f"[UPLOAD] Processing batch {i//batch_size + 1}/{(len(emails_to_validate)-1)//batch_size + 1}")
+                    for email in batch:
+                        result = validate_email_complete(email, include_smtp=False)
+                        validation_results.append(result)
 
             print(f"[UPLOAD] Validation complete: {len(validation_results)} emails validated")
 
@@ -1315,8 +1357,9 @@ def export_tracked_emails():
 
             output.seek(0)
             response = make_response(output.getvalue())
-            response.headers['Content-Type'] = 'text/csv'
+            response.headers['Content-Type'] = 'text/csv; charset=utf-8'
             response.headers['Content-Disposition'] = 'attachment; filename=tracked_emails.csv'
+            response.headers['Cache-Control'] = 'no-cache'
             return response
         else:
             return jsonify({
@@ -1694,8 +1737,11 @@ def export_csv():
         from flask import Response
         return Response(
             csv_content,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename=validation_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'}
+            mimetype='text/csv; charset=utf-8',
+            headers={
+                'Content-Disposition': f'attachment; filename=validation_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+                'Cache-Control': 'no-cache'
+            }
         )
     except Exception as e:
         return jsonify({"error": f"Failed to generate CSV: {str(e)}"}), 500
