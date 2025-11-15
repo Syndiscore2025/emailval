@@ -511,7 +511,7 @@ def clear_database():
                 "total_duplicates_prevented": 0
             }
         }
-        tracker.save()
+        tracker._save_database()
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
