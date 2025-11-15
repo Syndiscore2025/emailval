@@ -115,28 +115,68 @@ class EmailTracker:
         new_count = 0
         updated_count = 0
         
-        # Create validation lookup
+        # Create validation lookup with full data
         validation_lookup = {}
         if validation_results:
             for result in validation_results:
-                validation_lookup[result.get('email', '').lower()] = result.get('valid', False)
-        
+                email_key = result.get('email', '').lower()
+                # Flatten the nested structure for easier storage
+                checks = result.get('checks', {})
+                type_checks = checks.get('type', {})
+
+                flattened_result = {
+                    'email': result.get('email', ''),
+                    'valid': result.get('valid', False),
+                    'type': type_checks.get('email_type', 'unknown'),
+                    'is_disposable': type_checks.get('is_disposable', False),
+                    'is_role_based': type_checks.get('is_role_based', False),
+                    'checks': checks
+                }
+                validation_lookup[email_key] = flattened_result
+
         for email in emails:
             email_lower = email.lower().strip()
-            
+            validation_data = validation_lookup.get(email_lower, {})
+
             if email_lower in self.data["emails"]:
                 # Update existing email
                 self.data["emails"][email_lower]["last_seen"] = timestamp
                 self.data["emails"][email_lower]["send_count"] += 1
+
+                # Update validation data if provided
+                if validation_data:
+                    self.data["emails"][email_lower]["valid"] = validation_data.get('valid', False)
+                    self.data["emails"][email_lower]["type"] = validation_data.get('type', 'unknown')
+                    self.data["emails"][email_lower]["is_disposable"] = validation_data.get('is_disposable', False)
+                    self.data["emails"][email_lower]["is_role_based"] = validation_data.get('is_role_based', False)
+                    self.data["emails"][email_lower]["last_validated"] = timestamp
+                    self.data["emails"][email_lower]["validation_count"] = self.data["emails"][email_lower].get("validation_count", 0) + 1
+
                 updated_count += 1
             else:
-                # Add new email
-                self.data["emails"][email_lower] = {
+                # Add new email with full validation data
+                email_record = {
                     "first_seen": timestamp,
                     "last_seen": timestamp,
                     "send_count": 1,
-                    "validation_status": validation_lookup.get(email_lower, None)
+                    "validation_count": 1 if validation_data else 0
                 }
+
+                # Add validation fields if available
+                if validation_data:
+                    email_record["valid"] = validation_data.get('valid', False)
+                    email_record["type"] = validation_data.get('type', 'unknown')
+                    email_record["is_disposable"] = validation_data.get('is_disposable', False)
+                    email_record["is_role_based"] = validation_data.get('is_role_based', False)
+                    email_record["last_validated"] = timestamp
+                else:
+                    email_record["valid"] = None
+                    email_record["type"] = "unknown"
+                    email_record["is_disposable"] = False
+                    email_record["is_role_based"] = False
+                    email_record["last_validated"] = None
+
+                self.data["emails"][email_lower] = email_record
                 new_count += 1
         
         # Track session

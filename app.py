@@ -547,16 +547,28 @@ def get_logs():
         tracker = get_tracker()
         logs = []
 
-        for session in tracker.data.get('sessions', [])[:100]:  # Last 100 sessions
+        # Get sessions in reverse order (newest first)
+        sessions = tracker.data.get('sessions', [])
+        sessions_reversed = list(reversed(sessions))[:100]  # Last 100 sessions
+
+        for session in sessions_reversed:
+            # Get filenames from session
+            filenames = session.get('filenames', [])
+            filename_str = ', '.join(filenames) if filenames else 'N/A'
+
+            emails_count = session.get('emails_count', 0)
+            new_emails = session.get('new_emails', 0)
+            duplicates = session.get('duplicates', 0)
+
             logs.append({
                 'timestamp': session.get('timestamp', ''),
-                'type': session.get('type', 'bulk'),
-                'email': session.get('filename', ''),
-                'filename': session.get('filename', ''),
+                'type': 'bulk',
+                'email': filename_str,
+                'filename': filename_str,
                 'status': 'success',
-                'result': f"{session.get('emails_found', 0)} emails found",
-                'duration': session.get('duration', 0),
-                'ip': session.get('ip', 'N/A')
+                'result': f"{emails_count} emails found ({new_emails} new, {duplicates} duplicates)",
+                'duration': '0ms',
+                'ip': 'N/A'
             })
 
         return jsonify({"success": True, "logs": logs})
