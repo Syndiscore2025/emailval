@@ -61,31 +61,76 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
     
     smtp_response = ""
     mailbox_exists = False
-    
+    smtp_status = "unknown"  # unknown, verified, unverifiable, invalid
+    confidence = "low"  # low, medium, high
+
     try:
         # Connect to SMTP server with reduced timeout
         with smtplib.SMTP(timeout=timeout) as smtp:
             smtp.connect(mx_host)
             smtp_response = smtp.helo()[1].decode('utf-8', errors='ignore')
             smtp.mail(sender)
-            
+
             # Send RCPT TO - this checks if mailbox exists
             code, message = smtp.rcpt(email)
             smtp_response += f" | RCPT: {code} {message.decode('utf-8', errors='ignore')}"
-            
+
+            # Smart response code handling
             if code in [250, 251]:
+                # Mailbox definitely exists
                 mailbox_exists = True
+                smtp_status = "verified"
+                confidence = "high"
+            elif code in [450, 451, 452]:
+                # Temporary failure - assume valid but unverified
+                mailbox_exists = True  # Don't reject on temporary errors
+                smtp_status = "unverifiable"
+                confidence = "medium"
+                errors.append(f"Temporary failure (code {code}) - assuming valid")
+            elif code == 550:
+                # Could be "mailbox doesn't exist" OR "domain blocks verification"
+                # Check if it's a major provider that blocks verification
+                major_providers = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+                                 'aol.com', 'icloud.com', 'live.com', 'msn.com']
+                if any(provider in domain.lower() for provider in major_providers):
+                    # Major provider blocking verification - assume valid
+                    mailbox_exists = True
+                    smtp_status = "unverifiable"
+                    confidence = "medium"
+                    errors.append(f"Provider blocks verification (code {code}) - assuming valid")
+                else:
+                    # Smaller domain, likely invalid
+                    mailbox_exists = False
+                    smtp_status = "invalid"
+                    confidence = "high"
+                    errors.append(f"Mailbox doesn't exist (code {code})")
+            elif code in [421, 554]:
+                # Service unavailable or policy rejection - assume valid
+                mailbox_exists = True
+                smtp_status = "unverifiable"
+                confidence = "low"
+                errors.append(f"Service unavailable (code {code}) - assuming valid")
             else:
-                errors.append(f"Mailbox verification failed: {code}")
-            
-    except (smtplib.SMTPServerDisconnected, smtplib.SMTPResponseException, 
+                # Unknown code - be conservative and assume valid
+                mailbox_exists = True
+                smtp_status = "unverifiable"
+                confidence = "low"
+                errors.append(f"Unknown SMTP code {code} - assuming valid")
+
+    except (smtplib.SMTPServerDisconnected, smtplib.SMTPResponseException,
             socket.timeout, socket.gaierror, ConnectionRefusedError, Exception) as e:
-        errors.append(f"SMTP error: {str(e)[:100]}")
-    
+        # Network/connection errors - assume valid (don't penalize for our connection issues)
+        mailbox_exists = True
+        smtp_status = "unverifiable"
+        confidence = "low"
+        errors.append(f"SMTP error: {str(e)[:100]} - assuming valid")
+
     return {
         "email": email,
         "valid": mailbox_exists,
         "mailbox_exists": mailbox_exists,
+        "smtp_status": smtp_status,  # verified, unverifiable, invalid, unknown
+        "confidence": confidence,  # high, medium, low
         "smtp_response": smtp_response[:200],  # Limit response length
         "errors": errors,
         "skipped": False
