@@ -614,7 +614,7 @@ function displayBulkResults(data) {
                 </div>
                 <div class="stat-card" style="border: 2px solid var(--error);">
                     <div class="stat-value invalid">${data.duplicate_emails_count || 0}</div>
-                    <div class="stat-label">Duplicates Skipped</div>
+                    <div class="stat-label">Duplicates</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value valid">${summary.valid || 0}</div>
@@ -624,37 +624,28 @@ function displayBulkResults(data) {
                     <div class="stat-value invalid">${summary.invalid || 0}</div>
                     <div class="stat-label">Invalid</div>
                 </div>
+                ${(summary.disposable || 0) > 0 ? `
                 <div class="stat-card">
-                    <div class="stat-value warning">${summary.disposable || 0}</div>
+                    <div class="stat-value warning">${summary.disposable}</div>
                     <div class="stat-label">Disposable</div>
                 </div>
+                ` : ''}
+                ${(summary.role_based || 0) > 0 ? `
                 <div class="stat-card">
-                    <div class="stat-value warning">${summary.role_based || 0}</div>
+                    <div class="stat-value warning">${summary.role_based}</div>
                     <div class="stat-label">Role-Based</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value">${summary.personal || 0}</div>
-                    <div class="stat-label">Personal</div>
+                ` : ''}
+            </div>
+
+            <!-- File Information & Export -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+                <div style="color: var(--text-muted); font-size: 0.875rem;">
+                    📁 ${data.files_processed || 0} file(s) processed
+                    ${fileResults.length > 0 ? `• ${fileResults.map(f => escapeHtml(f.filename)).join(', ')}` : ''}
                 </div>
-            </div>
-
-            <!-- File Information -->
-            <div class="mt-4 mb-3">
-                <h4 class="mb-2">Files Processed: ${data.files_processed || 0}</h4>
-                ${fileResults.map(file => `
-                    <div class="mb-2">
-                        <strong>${escapeHtml(file.filename)}</strong> -
-                        ${file.emails_found} emails found
-                        ${file.errors && file.errors.length > 0 ?
-                            `<span class="text-error">(${file.errors.length} errors)</span>` : ''}
-                    </div>
-                `).join('')}
-            </div>
-
-            <!-- Export Button -->
-            <div class="mb-3">
-                <button class="btn btn-primary" onclick="exportResults()">
-                    📥 Export Results as CSV
+                <button class="btn btn-primary" onclick="exportResults()" style="white-space: nowrap;">
+                    📥 Export CSV
                 </button>
             </div>
 

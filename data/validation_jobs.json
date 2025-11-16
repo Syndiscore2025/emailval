@@ -86,5 +86,27 @@
     },
     "webhook_url": null,
     "error": null
+  },
+  "ba8a790d": {
+    "job_id": "ba8a790d",
+    "status": "completed",
+    "total_emails": 207,
+    "validated_count": 207,
+    "valid_count": 188,
+    "invalid_count": 19,
+    "disposable_count": 0,
+    "role_based_count": 2,
+    "personal_count": 186,
+    "started_at": "2025-11-16T06:30:19.535842",
+    "completed_at": "2025-11-16T06:30:32.245025",
+    "session_info": {
+      "files_processed": 1,
+      "filenames": [
+        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
+      ],
+      "include_smtp": true
+    },
+    "webhook_url": null,
+    "error": null
   }
 }
