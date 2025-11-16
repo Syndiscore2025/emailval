@@ -34,6 +34,7 @@
                     <option value="">All Status</option>
                     <option value="valid">Valid</option>
                     <option value="invalid">Invalid</option>
+                    <option value="disposable">Disposable</option>
                 </select>
                 <select id="type-filter" onchange="filterEmails()">
                     <option value="">All Types</option>
@@ -42,10 +43,19 @@
                     <option value="role">Role-based</option>
                     <option value="disposable">Disposable</option>
                 </select>
+                <button id="reverify-all-btn" class="btn-secondary" onclick="reverifyAllInvalid()">Re-verify All Invalid</button>
+                <button id="delete-all-disposable-btn" class="btn-danger" onclick="deleteAllDisposable()">Delete All Disposable</button>
                 <button class="btn-primary" onclick="exportEmails()">Export CSV</button>
             </div>
         </div>
-        
+
+        <div id="bulk-operation-status" class="bulk-status" style="display: none;">
+            <div id="bulk-status-text"></div>
+            <div class="bulk-progress">
+                <div id="bulk-progress-bar" class="bulk-progress-bar"></div>
+            </div>
+        </div>
+
         <div class="stats-bar">
             <span>Total: <strong id="total-count">0</strong></span>
             <span>Valid: <strong id="valid-count">0</strong></span>

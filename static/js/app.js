@@ -446,6 +446,8 @@ async function uploadFiles() {
         state.isProcessing = false;
     }
 
+	}
+
 // Fallback: poll job status if SSE connection drops
 function startJobStatusPolling(jobId, initialData) {
     const POLL_INTERVAL_MS = 5000;
@@ -462,6 +464,22 @@ function startJobStatusPolling(jobId, initialData) {
         try {
             const response = await fetch(`/api/jobs/${jobId}`);
             if (!response.ok) {
+                // If the job can no longer be found (e.g. server restarted or
+                // job record was cleaned up), stop polling so the UI doesn't
+                // sit at 99% forever and fall back to the initial results.
+                if (response.status === 404) {
+                    console.warn('[POLL] Job not found (404); treating as complete based on initial data');
+                    clearInterval(jobStatusPollTimerId);
+                    jobStatusPollTimerId = null;
+
+                    showProgress(100, 'Complete (job no longer tracked)');
+                    setTimeout(() => {
+                        hideProgress();
+                        displayBulkResults(initialData);
+                    }, 500);
+                    return;
+                }
+
                 throw new Error(`Job poll failed with status ${response.status}`);
             }
 

@@ -1,218 +1,16 @@
 {
-  "90618fc9": {
-    "job_id": "90618fc9",
+  "3c3a2ae9": {
+    "job_id": "3c3a2ae9",
     "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "started_at": "2025-11-15T07:28:55.868044",
-    "completed_at": "2025-11-15T07:29:13.210332",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "6466a3a4": {
-    "job_id": "6466a3a4",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "started_at": "2025-11-15T07:42:22.645224",
-    "completed_at": "2025-11-15T07:42:41.659091",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "f620f508": {
-    "job_id": "f620f508",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "started_at": "2025-11-15T07:48:50.325465",
-    "completed_at": "2025-11-15T07:49:07.340490",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "a484abc7": {
-    "job_id": "a484abc7",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "started_at": "2025-11-15T07:52:50.827929",
-    "completed_at": "2025-11-15T07:53:07.815304",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "a3beb7cc": {
-    "job_id": "a3beb7cc",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "started_at": "2025-11-15T08:23:29.616085",
-    "completed_at": "2025-11-15T08:23:47.756140",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "ed59d0c8": {
-    "job_id": "ed59d0c8",
-    "status": "pending",
-    "total_emails": 6054,
-    "validated_count": 0,
-    "valid_count": 0,
-    "invalid_count": 0,
-    "started_at": "2025-11-15T08:38:58.442512",
-    "completed_at": null,
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "3359clean_3359-clean.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "09a6c0ec": {
-    "job_id": "09a6c0ec",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "disposable_count": 0,
-    "role_based_count": 2,
-    "personal_count": 190,
-    "started_at": "2025-11-15T11:20:03.540389",
-    "completed_at": "2025-11-15T11:20:22.649726",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "f4ecccdd": {
-    "job_id": "f4ecccdd",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 192,
-    "invalid_count": 15,
-    "disposable_count": 0,
-    "role_based_count": 2,
-    "personal_count": 190,
-    "started_at": "2025-11-15T11:22:40.416364",
-    "completed_at": "2025-11-15T11:22:57.453476",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "e6ddafac": {
-    "job_id": "e6ddafac",
-    "status": "pending",
     "total_emails": 6034,
-    "validated_count": 0,
-    "valid_count": 0,
-    "invalid_count": 0,
-    "disposable_count": 0,
-    "role_based_count": 0,
-    "personal_count": 0,
-    "started_at": "2025-11-15T11:24:18.134813",
-    "completed_at": null,
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "3359clean_3359-clean.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "b0e775e1": {
-    "job_id": "b0e775e1",
-    "status": "pending",
-    "total_emails": 6034,
-    "validated_count": 0,
-    "valid_count": 0,
-    "invalid_count": 0,
-    "disposable_count": 0,
-    "role_based_count": 0,
-    "personal_count": 0,
-    "started_at": "2025-11-15T11:27:28.711303",
-    "completed_at": null,
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "3359clean_3359-clean.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "e71d9ff9": {
-    "job_id": "e71d9ff9",
-    "status": "running",
-    "total_emails": 6054,
-    "validated_count": 2647,
-    "valid_count": 5824,
-    "invalid_count": -3177,
+    "validated_count": 6034,
+    "valid_count": 5510,
+    "invalid_count": 524,
     "disposable_count": 0,
     "role_based_count": 130,
-    "personal_count": 5694,
-    "started_at": "2025-11-15T11:31:53.894765",
-    "completed_at": null,
+    "personal_count": 5380,
+    "started_at": "2025-11-16T04:05:30.773467",
+    "completed_at": "2025-11-16T04:16:30.205231",
     "session_info": {
       "files_processed": 1,
       "filenames": [
@@ -223,66 +21,22 @@
     "webhook_url": null,
     "error": null
   },
-  "760b04d6": {
-    "job_id": "760b04d6",
-    "status": "completed",
-    "total_emails": 207,
-    "validated_count": 207,
-    "valid_count": 191,
-    "invalid_count": 16,
-    "disposable_count": 0,
-    "role_based_count": 2,
-    "personal_count": 189,
-    "started_at": "2025-11-15T11:38:50.191478",
-    "completed_at": "2025-11-15T11:40:23.024584",
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "7-15_days_old_pre_qualified_mca_leads_1.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "07e8b3ca": {
-    "job_id": "07e8b3ca",
+  "21610fb0": {
+    "job_id": "21610fb0",
     "status": "running",
-    "total_emails": 6054,
-    "validated_count": 0,
-    "valid_count": 0,
-    "invalid_count": 0,
-    "disposable_count": 0,
-    "role_based_count": 0,
-    "personal_count": 0,
-    "started_at": "2025-11-15T11:47:09.899687",
+    "total_emails": 12241,
+    "validated_count": 6645,
+    "valid_count": 12234,
+    "invalid_count": 7,
+    "disposable_count": 1,
+    "role_based_count": 151,
+    "personal_count": 12082,
+    "started_at": "2025-11-16T04:27:34.758911",
     "completed_at": null,
     "session_info": {
       "files_processed": 1,
       "filenames": [
-        "3359clean_3359-clean.xlsx"
-      ],
-      "include_smtp": true
-    },
-    "webhook_url": null,
-    "error": null
-  },
-  "7af46d42": {
-    "job_id": "7af46d42",
-    "status": "running",
-    "total_emails": 6054,
-    "validated_count": 0,
-    "valid_count": 0,
-    "invalid_count": 0,
-    "disposable_count": 0,
-    "role_based_count": 0,
-    "personal_count": 0,
-    "started_at": "2025-11-15T11:48:39.034977",
-    "completed_at": null,
-    "session_info": {
-      "files_processed": 1,
-      "filenames": [
-        "3359clean_3359-clean.xlsx"
+        "emails_export_2025-11-15_2.csv"
       ],
       "include_smtp": true
     },

@@ -21,10 +21,12 @@ async function loadEmails() {
         const data = await response.json();
 
         if (data.success) {
+            // Always refresh the full dataset, but then re-apply whatever
+            // filters are currently selected in the UI so the view stays
+            // on "Invalid" / "Disposable" etc instead of jumping back
+            // to "All Status" after a re-verify or delete.
             allEmails = data.emails;
-            filteredEmails = allEmails;
-            updateStats();
-            renderEmails();
+            filterEmails();
         } else {
             showError('Error loading emails: ' + (data.error || 'Unknown error'));
         }
@@ -53,8 +55,15 @@ function filterEmails() {
         }
 
         // Type filter
-        if (typeFilter && email.type !== typeFilter) {
-            return false;
+        if (typeFilter) {
+            if (typeFilter === 'disposable') {
+                // Treat disposable as either a status or a type flag
+                if (!(email.type === 'disposable' || email.status === 'disposable')) {
+                    return false;
+                }
+            } else if (email.type !== typeFilter) {
+                return false;
+            }
         }
 
         return true;
@@ -71,7 +80,9 @@ function filterEmails() {
 function updateStats() {
     const validCount = allEmails.filter(e => e.status === 'valid').length;
     const invalidCount = allEmails.filter(e => e.status === 'invalid').length;
-    const disposableCount = allEmails.filter(e => e.status === 'disposable').length;
+    const disposableCount = allEmails.filter(
+        e => e.status === 'disposable' || e.type === 'disposable'
+    ).length;
 
     document.getElementById('total-count').textContent = allEmails.length;
     document.getElementById('valid-count').textContent = validCount;
@@ -111,7 +122,7 @@ function renderEmails() {
             <td>${formatDate(email.first_seen)}</td>
             <td>${formatDate(email.last_validated)}</td>
             <td>${email.validation_count || 0}</td>
-            <td>
+            <td class="actions-cell">
                 <button class="btn-primary-sm" onclick='showEmailDetails(${JSON.stringify(email).replace(/'/g, "&apos;")})'>Details</button>
                 ${email.status === 'invalid' ? `<button class="btn-secondary-sm" onclick="reverifyEmail('${encodeURIComponent(email.email)}')">Re-verify</button>` : ''}
                 ${email.status === 'disposable' ? `<button class="btn-danger-sm" onclick="deleteEmailWrapper('${encodeURIComponent(email.email)}')">Delete</button>` : ''}
@@ -184,10 +195,220 @@ async function reverifyEmail(rawEmail) {
         if (!data.success) {
             return showError('Re-verify failed: ' + (data.error || 'Unknown error'));
         }
-        // Reload table to reflect updated status
+        // Reload table to reflect updated status while keeping filters
         await loadEmails();
     } catch (err) {
         showError('Re-verify error: ' + err.message);
+    }
+}
+
+/**
+ * Re-verify all invalid emails in the database, with in-page progress
+ * and a simple summary report when finished.
+ */
+async function reverifyAllInvalid() {
+    const invalidEmails = allEmails.filter(e => e.status === 'invalid').map(e => e.email);
+
+    if (invalidEmails.length === 0) {
+        alert('There are no invalid emails to re-verify.');
+        return;
+    }
+
+    if (!confirm(`Re-verify all ${invalidEmails.length} invalid emails? This may take several minutes.`)) {
+        return;
+    }
+
+    const BATCH_SIZE = 100;
+    const total = invalidEmails.length;
+    let processed = 0;
+
+    // Per-run summary counters
+    let rescuedCount = 0;           // invalid -> valid
+    let stillInvalidCount = 0;      // stayed invalid
+    let markedDisposableCount = 0;  // marked disposable / obvious junk
+
+    const btn = document.getElementById('reverify-all-btn');
+
+    if (btn) {
+        btn.disabled = true;
+    }
+
+    console.log('[REVERIFY] Starting bulk re-verify for', total, 'invalid email(s). Batch size:', BATCH_SIZE);
+    setBulkStatus(`Starting re-verify for ${total} invalid email(s)...`, 'in-progress', 0);
+
+    try {
+        while (processed < total) {
+            const batch = invalidEmails.slice(processed, processed + BATCH_SIZE);
+            console.log('[REVERIFY] Sending batch', processed + 1, 'to', processed + batch.length, 'to /admin/api/emails/reverify');
+
+            const response = await fetch('/admin/api/emails/reverify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emails: batch }),
+            });
+            const data = await response.json();
+            if (!data.success) {
+                setBulkStatus(`Bulk re-verify failed after ${processed} of ${total} emails: ${data.error || 'Unknown error'}`, 'error', processed / total);
+                return showError('Bulk re-verify failed: ' + (data.error || 'Unknown error'));
+            }
+
+            // Use the per-email results from the backend to build a summary
+            if (Array.isArray(data.results)) {
+                let batchRescued = 0;
+                let batchStillInvalid = 0;
+                let batchMarkedDisposable = 0;
+
+                data.results.forEach(r => {
+                    const isValid = !!r.valid;
+                    const isDisposable = (r.status === 'disposable') ||
+                        (r.checks && r.checks.type && r.checks.type.is_disposable);
+
+                    if (isDisposable) {
+                        markedDisposableCount++;
+                        batchMarkedDisposable++;
+                    } else if (isValid) {
+                        rescuedCount++;
+                        batchRescued++;
+                    } else {
+                        stillInvalidCount++;
+                        batchStillInvalid++;
+                    }
+                });
+
+                console.log('[REVERIFY] Batch summary', {
+                    batchStart: processed + 1,
+                    batchEnd: processed + batch.length,
+                    batchSize: batch.length,
+                    rescued: batchRescued,
+                    stillInvalid: batchStillInvalid,
+                    markedDisposable: batchMarkedDisposable,
+                });
+            }
+
+            processed += batch.length;
+            setBulkStatus(`Re-verifying invalid emails... ${processed} / ${total} complete`, 'in-progress', processed / total);
+        }
+
+        // Reload and keep current filters applied
+        await loadEmails();
+
+        // Build a human-readable summary for the banner
+        const summaryParts = [];
+        summaryParts.push(`Processed ${total} invalid email(s).`);
+        summaryParts.push(`${rescuedCount} became valid.`);
+        if (markedDisposableCount > 0) summaryParts.push(`${markedDisposableCount} were marked disposable.`);
+        if (stillInvalidCount > 0) summaryParts.push(`${stillInvalidCount} are still invalid.`);
+
+        const summaryMessage = 'Re-verify complete. ' + summaryParts.join(' ');
+        console.log('[REVERIFY] Bulk re-verify summary:', {
+            total,
+            rescuedCount,
+            stillInvalidCount,
+            markedDisposableCount,
+        });
+
+        setBulkStatus(summaryMessage, 'success', 1);
+    } catch (err) {
+        setBulkStatus(`Bulk re-verify error after ${processed} of ${total} emails: ${err.message}`, 'error', processed / total);
+        showError('Bulk re-verify error: ' + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Bulk delete all disposable emails with basic progress.
+ */
+async function deleteAllDisposable() {
+    const disposableEmails = allEmails
+        .filter(e => e.status === 'disposable' || e.type === 'disposable')
+        .map(e => e.email);
+
+    if (disposableEmails.length === 0) {
+        alert('There are no disposable emails to delete.');
+        return;
+    }
+
+    if (!confirm(`Delete all ${disposableEmails.length} disposable emails from the active list? This keeps a minimal history and cannot be undone.`)) {
+        return;
+    }
+
+    const BATCH_SIZE = 200;
+    const total = disposableEmails.length;
+    let processed = 0;
+    const btn = document.getElementById('delete-all-disposable-btn');
+
+    if (btn) {
+        btn.disabled = true;
+    }
+    setBulkStatus(`Deleting ${total} disposable email(s)...`, 'in-progress', 0);
+
+    try {
+        while (processed < total) {
+            const batch = disposableEmails.slice(processed, processed + BATCH_SIZE);
+            const response = await fetch('/admin/api/emails/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emails: batch }),
+            });
+            const data = await response.json();
+            if (!data.success) {
+                setBulkStatus(`Bulk delete failed after ${processed} of ${total} emails: ${data.error || 'Unknown error'}`, 'error', processed / total);
+                return showError('Bulk delete failed: ' + (data.error || 'Unknown error'));
+            }
+
+            processed += batch.length;
+            setBulkStatus(`Deleting disposable emails... ${processed} / ${total} complete`, 'in-progress', processed / total);
+        }
+
+        await loadEmails();
+        setBulkStatus(`Deleted ${total} disposable email(s) from the active list.`, 'success', 1);
+    } catch (err) {
+        setBulkStatus(`Bulk delete error after ${processed} of ${total} emails: ${err.message}`, 'error', processed / total);
+        showError('Bulk delete error: ' + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Update bulk-operation status banner.
+ */
+function setBulkStatus(message, type, progress) {
+    const box = document.getElementById('bulk-operation-status');
+    const textEl = document.getElementById('bulk-status-text');
+    const bar = document.getElementById('bulk-progress-bar');
+
+    if (!box) return;
+
+    if (!message) {
+        box.style.display = 'none';
+        box.className = 'bulk-status';
+        if (textEl) textEl.textContent = '';
+        if (bar) {
+            bar.style.width = '0%';
+            bar.style.display = 'none';
+        }
+        return;
+    }
+
+    box.style.display = 'block';
+    box.className = `bulk-status ${type || 'in-progress'}`;
+    if (textEl) textEl.textContent = message;
+
+    if (bar) {
+        if (typeof progress === 'number' && progress >= 0) {
+            const clamped = Math.max(0, Math.min(1, progress));
+            bar.style.display = 'block';
+            bar.style.width = `${clamped * 100}%`;
+        } else {
+            bar.style.display = 'none';
+            bar.style.width = '0%';
+        }
     }
 }
 

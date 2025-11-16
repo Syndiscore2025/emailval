@@ -62,9 +62,12 @@ class EmailTracker:
         try:
             with open(self.db_file, 'w') as f:
                 json.dump(self.data, f, indent=2)
+                # Ensure data is fully written to disk before continuing
+                f.flush()
+                os.fsync(f.fileno())
         except Exception as e:
             print(f"Error saving email history: {e}")
-    
+
     def check_duplicates(self, emails: List[str]) -> Dict[str, Any]:
         """
         Check which emails are duplicates (already seen before)

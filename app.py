@@ -182,10 +182,22 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
                 f"Pre-check valid: {valid_precheck}, Pre-check invalid: {invalid_precheck}"
             )
 
-        print(f"[BACKGROUND] Running parallel SMTP checks with 50 concurrent connections...")
+        max_smtp_workers_env = os.getenv("SMTP_MAX_WORKERS")
+        try:
+            max_smtp_workers = int(max_smtp_workers_env) if max_smtp_workers_env else 50
+        except (TypeError, ValueError):
+            max_smtp_workers = 50
+
+        if max_smtp_workers < 1:
+            max_smtp_workers = 1
+
+        print(
+            f"[BACKGROUND] Running parallel SMTP checks with {max_smtp_workers} "
+            f"concurrent connections..."
+        )
         smtp_results = validate_smtp_batch_with_progress(
             emails_to_validate,
-            max_workers=50,
+            max_workers=max_smtp_workers,
             timeout=3,
             progress_callback=progress_callback,
         )
@@ -551,15 +563,15 @@ def create_api_key():
     try:
         data = request.get_json()
         name = data.get('name', '')
-        description = data.get('description', '')
+        rate_limit = data.get('rate_limit', 60)
 
         if not name:
             return jsonify({"success": False, "error": "Key name is required"}), 400
 
         key_manager = get_key_manager()
-        api_key = key_manager.create_key(name, description)
+        result = key_manager.generate_key(name, rate_limit_per_minute=rate_limit)
 
-        return jsonify({"success": True, "api_key": api_key})
+        return jsonify({"success": True, "api_key": result["api_key"], "metadata": result["metadata"]})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -605,6 +617,13 @@ def get_emails():
                     status = 'invalid'
                 else:
                     status = 'unknown'
+
+            # Do not return hard-deleted entries in the main explorer.
+            # We still keep minimal history in the tracker file, but rows
+            # with statuses like "deleted_manual" / "deleted_crm" should
+            # disappear from this table once removed.
+            if status and status.startswith('deleted_'):
+                continue
 
             emails_data.append({
                 'email': email,
