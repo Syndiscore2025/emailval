@@ -49,6 +49,56 @@
       "usage_total": 0,
       "window_start": null,
       "window_count": 0
+    },
+    "ak_3ef3be1566f831f4": {
+      "key_hash": "0e63035581ebdd34c5f2f24ed8b7ce3d2877dd7c490a246b93e968abca22198e",
+      "name": "Test Key",
+      "created_at": "2025-11-16T10:13:37.759426",
+      "active": true,
+      "rate_limit_per_minute": 100,
+      "usage_total": 0,
+      "window_start": null,
+      "window_count": 0
+    },
+    "ak_428ff786c0ea6476": {
+      "key_hash": "4c1ec5a8e7c3841651b3b15773dfc5c856781cd6f98a9f25c36ed7780ffcfa0a",
+      "name": "Webhook Test Key",
+      "created_at": "2025-11-16T10:13:59.647464",
+      "active": true,
+      "rate_limit_per_minute": 100,
+      "usage_total": 0,
+      "window_start": null,
+      "window_count": 0
+    },
+    "ak_6ad670fce6ef8934": {
+      "key_hash": "0ae0a2a6c3243a05dcc60cc4109367c0f5a63b30105968b644241cf9632abda4",
+      "name": "CRM Test Key",
+      "created_at": "2025-11-16T10:19:10.186870",
+      "active": true,
+      "rate_limit_per_minute": 100,
+      "usage_total": 0,
+      "window_start": null,
+      "window_count": 0
+    },
+    "ak_baf75287575acafd": {
+      "key_hash": "609b894da72683534f60c4791a43d4e2a0d70ae6bfa3eab135f6d6be679f298b",
+      "name": "Auth Test Key",
+      "created_at": "2025-11-16T10:21:59.057027",
+      "active": false,
+      "rate_limit_per_minute": 10,
+      "usage_total": 0,
+      "window_start": null,
+      "window_count": 0
+    },
+    "ak_bf3a7e27a1e57058": {
+      "key_hash": "8fbfcd824a1e0a4fc60e15d43c0fb4ab40c84c5d37e545c9f12dcfe66edfcf94",
+      "name": "Auth Test Key",
+      "created_at": "2025-11-16T10:22:16.021714",
+      "active": false,
+      "rate_limit_per_minute": 10,
+      "usage_total": 0,
+      "window_start": null,
+      "window_count": 0
     }
   }
 }
