@@ -52,21 +52,31 @@ from modules.obvious_invalid import is_obviously_invalid
 app = Flask(__name__)
 
 
-def run_smtp_validation_background(job_id, emails_to_validate, tracker):
-    """Run SMTP validation in background thread with real-time progress"""
+def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_smtp: bool = True):
+    """Run validation in background thread with real-time progress.
+
+    When include_smtp is False, only fast pre-checks (syntax/domain/type) are run
+    and the progress bar maps directly 0–100% to those checks.
+    """
     job_tracker = get_job_tracker()
     validation_results = []
 
-    # Treat validation as two phases:
-    #  - Phase 1 (40% of bar): syntax / domain / type checks
-    #  - Phase 2 (60% of bar): SMTP checks in parallel
+    # Treat validation as one or two phases depending on include_smtp:
+    #  - Phase 1: syntax / domain / type checks (always)
+    #  - Phase 2: SMTP checks in parallel (optional)
     total_emails = len(emails_to_validate)
     if total_emails == 0:
         job_tracker.complete_job(job_id, success=True)
         return
 
-    PRECHECK_WEIGHT = 0.4
-    SMTP_WEIGHT = 0.6
+    if include_smtp:
+        PRECHECK_WEIGHT = 0.4
+        SMTP_WEIGHT = 0.6
+    else:
+        PRECHECK_WEIGHT = 1.0
+        SMTP_WEIGHT = 0.0
+
+    start_time = time.time()
 
     try:
         print(f"[BACKGROUND] ========================================")
@@ -74,10 +84,14 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
         print(f"[BACKGROUND] Total emails to validate: {total_emails}")
         print(f"[BACKGROUND] ========================================")
 
+        job = job_tracker.get_job(job_id) or {}
+        job_session_info = job.get("session_info", {}) if isinstance(job, dict) else {}
+
         # --------------------
         # Phase 1: Fast checks
         # --------------------
         print(f"[BACKGROUND] Step 1: Running syntax/domain/type checks...")
+
 
         # For smoother real-time updates on large files, update progress more frequently
         # but avoid writing to disk on every single email.
@@ -117,8 +131,13 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
                 )
                 personal = valid - disposable - role_based
 
-                # Map phase 1 progress into 0-40% of the overall bar
-                progress_fraction = PRECHECK_WEIGHT * (completed_precheck / total_emails)
+                # Map phase 1 progress into the appropriate portion of the bar.
+                # If include_smtp is False, PRECHECK_WEIGHT will be 1.0 so this covers 0-100%.
+                if include_smtp:
+                    progress_fraction = PRECHECK_WEIGHT * (completed_precheck / total_emails)
+                else:
+                    progress_fraction = completed_precheck / total_emails
+
                 effective_validated = int(total_emails * progress_fraction)
 
                 job_tracker.update_progress(
@@ -147,6 +166,49 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
         print(
             f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated"
         )
+
+        # If SMTP is disabled for this job, we can finish after pre-checks.
+        if not include_smtp:
+            final_valid = sum(1 for r in validation_results if r.get("valid", False))
+            final_invalid = total_emails - final_valid
+
+            final_disposable = sum(
+                1
+                for r in validation_results
+                if r.get("checks", {}).get("type", {}).get("is_disposable", False)
+            )
+            final_role_based = sum(
+                1
+                for r in validation_results
+                if r.get("checks", {}).get("type", {}).get("is_role_based", False)
+            )
+            final_personal = final_valid - final_disposable - final_role_based
+
+            job_tracker.update_progress(
+                job_id,
+                total_emails,
+                final_valid,
+                final_invalid,
+                final_disposable,
+                final_role_based,
+                final_personal,
+            )
+
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            session_info = {
+                "job_id": job_id,
+                "session_type": job_session_info.get("session_type", "bulk"),
+                "files_processed": job_session_info.get("files_processed"),
+                "filenames": job_session_info.get("filenames"),
+                "include_smtp": include_smtp,
+                "duration_ms": duration_ms,
+            }
+            tracker.track_emails(emails_to_validate, validation_results, session_info)
+
+            job_tracker.complete_job(job_id, success=True)
+            print(f"[BACKGROUND] Pre-check-only validation complete for job {job_id}")
+            return
 
         # Build a mapping of email -> domain info from phase 1 so the SMTP
         # phase can reuse DNS/MX results instead of repeating DNS lookups in
@@ -273,7 +335,15 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
         print(f"[BACKGROUND] Parallel SMTP validation complete for job {job_id}")
 
         # Save results to database
-        session_info = {"job_id": job_id}
+        duration_ms = int((time.time() - start_time) * 1000)
+        session_info = {
+            "job_id": job_id,
+            "session_type": job_session_info.get("session_type", "bulk"),
+            "files_processed": job_session_info.get("files_processed"),
+            "filenames": job_session_info.get("filenames"),
+            "include_smtp": include_smtp,
+            "duration_ms": duration_ms,
+        }
         tracker.track_emails(emails_to_validate, validation_results, session_info)
 
         # Mark job as complete
@@ -1336,7 +1406,6 @@ def upload_file():
         if should_validate and new_emails:
             print(f"[UPLOAD] Starting validation of {len(new_emails)} new emails...")
             print(f"[UPLOAD] SMTP validation: {include_smtp}")
-            validation_results = []
 
             # Validate ALL emails (no limits!)
             emails_to_validate = new_emails
@@ -1348,8 +1417,9 @@ def upload_file():
                 session_info={
                     "files_processed": len(file_results),
                     "filenames": [f["filename"] for f in file_results],
-                    "include_smtp": include_smtp
-                }
+                    "include_smtp": include_smtp,
+                    "session_type": "bulk",
+                },
             )
             response["job_id"] = job_id
 
@@ -1358,105 +1428,46 @@ def upload_file():
             # Initialize progress to 0 to show job has started
             job_tracker.update_progress(job_id, 0, 0, 0, 0, 0, 0)
 
-            # SMTP validation uses parallel processing for speed
-            if include_smtp:
-                print(f"[UPLOAD] Starting background SMTP validation for {len(emails_to_validate)} emails...")
-                print(f"[UPLOAD] Sample emails to validate: {emails_to_validate[:3]}")
+            # Run validation in a background thread (with or without SMTP).
+            print(
+                f"[UPLOAD] Starting background validation for {len(emails_to_validate)} "
+                f"emails (include_smtp={include_smtp})..."
+            )
+            print(f"[UPLOAD] Sample emails to validate: {emails_to_validate[:3]}")
 
-                # Start SMTP validation in background thread
-                def thread_wrapper():
-                    try:
-                        run_smtp_validation_background(job_id, emails_to_validate, tracker)
-                    except Exception as e:
-                        print(f"[UPLOAD] CRITICAL ERROR in background thread: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        job_tracker.complete_job(job_id, success=False, error=str(e))
-
-                thread = threading.Thread(
-                    target=thread_wrapper,
-                    daemon=True
-                )
-                thread.start()
-                print(f"[UPLOAD] Background validation thread started for job {job_id}")
-                print(f"[UPLOAD] Thread is alive: {thread.is_alive()}")
-
-                # Return immediately with job_id - client will stream progress via SSE
-                response["message"] = "SMTP validation started in background"
-                response["validation_status"] = "in_progress"
-                # total_emails_found already set in response dict above
-
-                # Return early - validation happening in background
-                return jsonify(response), 200
-            else:
-                # Non-SMTP validation (fast, sequential is fine)
-                for i in range(0, len(emails_to_validate), batch_size):
-                    batch = emails_to_validate[i:i + batch_size]
-                    print(f"[UPLOAD] Processing batch {i//batch_size + 1}/{(len(emails_to_validate)-1)//batch_size + 1}")
-                    for email in batch:
-                        result = validate_email_complete(email, include_smtp=False)
-                        validation_results.append(result)
-
-                    # Update progress with detailed stats
-                    completed = len(validation_results)
-                    valid = sum(1 for r in validation_results if r.get('valid', False))
-                    invalid = completed - valid
-                    disposable = sum(1 for r in validation_results
-                                   if r.get("checks", {}).get("type", {}).get("is_disposable", False))
-                    role_based = sum(1 for r in validation_results
-                                   if r.get("checks", {}).get("type", {}).get("is_role_based", False))
-                    personal = valid - disposable - role_based
-                    job_tracker.update_progress(job_id, completed, valid, invalid, disposable, role_based, personal)
-
-                # Mark job as complete
-                job_tracker.complete_job(job_id, success=True)
-
-            print(f"[UPLOAD] Validation complete: {len(validation_results)} emails validated")
-
-            # Calculate statistics
-            valid_count = sum(1 for r in validation_results if r["valid"])
-            invalid_count = len(validation_results) - valid_count
-
-            # Count by type
-            disposable_count = sum(1 for r in validation_results
-                                 if r.get("checks", {}).get("type", {}).get("is_disposable", False))
-            role_based_count = sum(1 for r in validation_results
-                                  if r.get("checks", {}).get("type", {}).get("is_role_based", False))
-
-            response["validation_results"] = validation_results[:100]  # Return first 100 for preview
-            response["validation_summary"] = {
-                "total": len(validation_results),
-                "valid": valid_count,
-                "invalid": invalid_count,
-                "disposable": disposable_count,
-                "role_based": role_based_count,
-                "personal": valid_count - disposable_count - role_based_count
-            }
-            response["full_results_count"] = len(validation_results)
-
-            # Track the new emails in the database
-            from datetime import datetime
-
-            duration_ms = 0
-            # For bulk uploads we don't have a per-job started_at, so approximate
-            # duration from when this request began. If session_info with a
-            # started_at was passed in the future we could refine this.
-            request_start = session_info.get("started_at") if "session_info" in locals() else None
-            if request_start:
+            def thread_wrapper():
                 try:
-                    start_dt = datetime.fromisoformat(request_start)
-                    duration_ms = int((datetime.now() - start_dt).total_seconds() * 1000)
-                except Exception:
-                    duration_ms = 0
+                    run_smtp_validation_background(
+                        job_id,
+                        emails_to_validate,
+                        tracker,
+                        include_smtp=include_smtp,
+                    )
+                except Exception as e:
+                    print(f"[UPLOAD] CRITICAL ERROR in background thread: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    job_tracker.complete_job(job_id, success=False, error=str(e))
 
-            session_info = {
-                "files_processed": len(file_results),
-                "filenames": [f["filename"] for f in file_results],
-                "session_type": "bulk",
-                "duration_ms": duration_ms,
-            }
-            tracking_stats = tracker.track_emails(new_emails, validation_results, session_info)
-            response["tracking_stats"] = tracking_stats
+            thread = threading.Thread(
+                target=thread_wrapper,
+                daemon=True,
+            )
+            thread.start()
+            print(f"[UPLOAD] Background validation thread started for job {job_id}")
+            print(f"[UPLOAD] Thread is alive: {thread.is_alive()}")
+
+            # Return immediately with job_id - client will stream progress via SSE
+            if include_smtp:
+                response["message"] = "SMTP validation started in background"
+            else:
+                response["message"] = "Validation started in background (SMTP disabled)"
+
+            response["validation_status"] = "in_progress"
+            # total_emails_found already set in response dict above
+
+            # Return early - validation happening in background
+            return jsonify(response), 200
         elif should_validate and not new_emails:
             # All emails are duplicates
             response["validation_summary"] = {
