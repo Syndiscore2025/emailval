@@ -221,13 +221,13 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
                 result = future.result(timeout=timeout + 2)
                 results[email] = result
             except TimeoutError:
-                # Future timed out - mark as unverifiable
+                # Future timed out - mark as INVALID
                 results[email] = {
                     "email": email,
-                    "valid": True,  # Don't penalize for timeout
-                    "mailbox_exists": True,
+                    "valid": False,
+                    "mailbox_exists": False,
                     "smtp_response": "",
-                    "errors": [f"Validation timeout after {timeout + 2}s - assuming valid"],
+                    "errors": [f"Validation timeout after {timeout + 2}s - connection hung"],
                     "skipped": False
                 }
             except Exception as e:
