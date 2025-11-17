@@ -23,21 +23,39 @@ class JobTracker:
             try:
                 with open(self.data_file, 'r') as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
-    
+
+    def _refresh_from_disk(self):
+        """Refresh in-memory jobs from disk.
+
+        This makes job tracking safe across multiple Gunicorn workers by
+        ensuring each process sees the latest job state written by others.
+        """
+        if os.path.exists(self.data_file):
+            try:
+                self.jobs = self._load_jobs()
+            except Exception:
+                # If refresh fails, keep existing in-memory state instead of
+                # crashing the request handler.
+                pass
+
     def _save_jobs(self):
         """Save jobs to disk"""
         os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
         with open(self.data_file, 'w') as f:
             json.dump(self.jobs, f, indent=2)
-    
+
     def create_job(self, total_emails: int, session_info: Dict[str, Any] = None) -> str:
         """Create a new validation job"""
         job_id = str(uuid.uuid4())[:8]
 
         with self.lock:
+            # Always refresh first so we don't overwrite jobs created by other
+            # workers/processes.
+            self._refresh_from_disk()
+
             self.jobs[job_id] = {
                 "job_id": job_id,
                 "status": "pending",  # pending, running, completed, failed
@@ -57,11 +75,14 @@ class JobTracker:
             self._save_jobs()
 
         return job_id
-    
+
     def update_progress(self, job_id: str, validated_count: int, valid_count: int = None, invalid_count: int = None,
-                       disposable_count: int = None, role_based_count: int = None, personal_count: int = None):
+                         disposable_count: int = None, role_based_count: int = None, personal_count: int = None):
         """Update job progress with detailed stats"""
         with self.lock:
+            # Refresh to merge with any updates written by other workers.
+            self._refresh_from_disk()
+
             if job_id in self.jobs:
                 self.jobs[job_id]["validated_count"] = validated_count
                 if valid_count is not None:
@@ -77,54 +98,63 @@ class JobTracker:
                 if self.jobs[job_id]["status"] == "pending":
                     self.jobs[job_id]["status"] = "running"
                 self._save_jobs()
-    
+
     def complete_job(self, job_id: str, success: bool = True, error: str = None):
         """Mark job as completed"""
         with self.lock:
+            # Refresh first so we don't clobber progress updates from another
+            # worker.
+            self._refresh_from_disk()
+
             if job_id in self.jobs:
                 self.jobs[job_id]["status"] = "completed" if success else "failed"
                 self.jobs[job_id]["completed_at"] = datetime.now().isoformat()
                 if error:
                     self.jobs[job_id]["error"] = error
                 self._save_jobs()
-    
+
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status"""
+        # Always read fresh state from disk so /api/jobs and SSE streaming see
+        # the latest progress regardless of which Gunicorn worker handles the
+        # request.
+        self._refresh_from_disk()
         return self.jobs.get(job_id)
-    
+
     def set_webhook(self, job_id: str, webhook_url: str):
         """Set webhook URL for job completion notification"""
         with self.lock:
+            self._refresh_from_disk()
             if job_id in self.jobs:
                 self.jobs[job_id]["webhook_url"] = webhook_url
                 self._save_jobs()
-    
+
     def get_progress_percent(self, job_id: str) -> float:
         """Get progress as percentage"""
         job = self.get_job(job_id)
         if not job or job["total_emails"] == 0:
             return 0.0
         return (job["validated_count"] / job["total_emails"]) * 100
-    
+
     def estimate_time_remaining(self, job_id: str) -> Optional[int]:
         """Estimate seconds remaining based on current progress"""
         job = self.get_job(job_id)
         if not job or job["status"] != "running":
             return None
-        
+
         validated = job["validated_count"]
         total = job["total_emails"]
-        
+
         if validated == 0:
             return None
-        
+
         # Calculate elapsed time
         started = datetime.fromisoformat(job["started_at"])
         elapsed = (datetime.now() - started).total_seconds()
-        
+
         # Estimate time per email
         time_per_email = elapsed / validated
-        
+
         # Estimate remaining time
         remaining_emails = total - validated
         return int(remaining_emails * time_per_email)

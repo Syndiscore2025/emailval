@@ -65,11 +65,9 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
     confidence = "low"  # low, medium, high
 
     try:
-        # Connect to SMTP server with timeout
-        # CRITICAL: Must pass host to constructor OR timeout to connect()
-        # Otherwise connect() will hang indefinitely!
-        with smtplib.SMTP(timeout=timeout) as smtp:
-            smtp.connect(mx_host, timeout=timeout)
+        # Connect to SMTP server with timeout. Passing host here ensures the
+        # timeout is applied to the TCP connect() call itself.
+        with smtplib.SMTP(host=mx_host, timeout=timeout) as smtp:
             smtp_response = smtp.helo()[1].decode('utf-8', errors='ignore')
             smtp.mail(sender)
 
@@ -216,20 +214,8 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
         for future in as_completed(future_to_email):
             email = future_to_email[future]
             try:
-                # Add timeout to prevent indefinite hangs
-                # Timeout should be slightly longer than SMTP timeout to allow for completion
-                result = future.result(timeout=timeout + 2)
+                result = future.result()
                 results[email] = result
-            except TimeoutError:
-                # Future timed out - mark as INVALID
-                results[email] = {
-                    "email": email,
-                    "valid": False,
-                    "mailbox_exists": False,
-                    "smtp_response": "",
-                    "errors": [f"Validation timeout after {timeout + 2}s - connection hung"],
-                    "skipped": False
-                }
             except Exception as e:
                 results[email] = {
                     "email": email,
@@ -243,6 +229,6 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
             completed += 1
             if progress_callback:
                 progress_callback(completed, total)
-    
+
     return results
 
