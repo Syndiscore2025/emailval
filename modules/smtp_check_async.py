@@ -12,24 +12,28 @@ from .utils import extract_domain
 from .domain_check import validate_domain
 
 
-def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Verify single email mailbox existence via SMTP (optimized version)
+def validate_smtp_single(
+    email: str,
+    timeout: int = 3,
+    sender: Optional[str] = None,
+    domain_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Verify a single mailbox via SMTP (optimized for batch use).
 
-    Args:
-        email: Email address to validate
-        timeout: SMTP connection timeout in seconds (reduced to 3s for speed)
-        sender: Email address to use as sender
-
-    Returns:
-        Dictionary with validation results
+    This function is used heavily in the threaded batch validator, so it is
+    designed to:
+    - Reuse DNS/domain results from phase 1 when provided (via ``domain_info``)
+      so we don't do a second round of DNS lookups in each worker thread.
+    - Fail *open* on network issues: if we can't complete SMTP due to our
+      connection problems, we treat the mailbox as "unverifiable/assumed valid"
+      instead of marking it invalid.
     """
-    errors = []
+    errors: List[str] = []
     domain = extract_domain(email)
-    
+
     if sender is None:
-        sender = os.getenv('SMTP_SENDER', 'noreply@validator.local')
-    
+        sender = os.getenv("SMTP_SENDER", "noreply@validator.local")
+
     if not domain:
         return {
             "email": email,
@@ -37,28 +41,45 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
             "mailbox_exists": False,
             "smtp_response": "",
             "errors": ["Could not extract domain from email"],
-            "skipped": False
+            "skipped": False,
         }
-    
-    # First check if domain has valid MX records
-    domain_check = validate_domain(email)
-    if not domain_check["valid"]:
+
+    # -----------------------------
+    # Domain / MX host resolution
+    # -----------------------------
+    # For large batch jobs we *always* do domain/DNS checks in phase 1.
+    # When ``domain_info`` is provided we reuse those results here instead of
+    # doing a second round of DNS lookups in every worker thread.
+    if domain_info is not None:
+        domain_check = {
+            "valid": domain_info.get("valid", False),
+            "has_mx": domain_info.get("has_mx", False),
+            "has_a": domain_info.get("has_a", False),
+            "mx_records": domain_info.get("mx_records", []),
+            "errors": domain_info.get("errors", []),
+        }
+    else:
+        domain_check = validate_domain(email)
+
+    if not domain_check.get("valid", False):
+        # Already known to be bad or unresolvable; skip SMTP and surface a
+        # clear "skipped" flag so callers can distinguish this case.
         return {
             "email": email,
             "valid": False,
             "mailbox_exists": False,
             "smtp_response": "",
-            "errors": ["Domain has no valid MX or A records"],
-            "skipped": True
+            "errors": domain_check.get("errors")
+            or ["Domain has no valid MX or A records"],
+            "skipped": True,
         }
-    
-    # Get MX server
+
     mx_records = domain_check.get("mx_records", [])
     if not mx_records:
         mx_host = domain
     else:
-        mx_host = mx_records[0].rstrip('.')
-    
+        mx_host = mx_records[0].rstrip(".")
+
     smtp_response = ""
     mailbox_exists = False
     smtp_status = "unknown"  # unknown, verified, unverifiable, invalid
@@ -68,7 +89,7 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
         # Connect to SMTP server with timeout. Passing host here ensures the
         # timeout is applied to the TCP connect() call itself.
         with smtplib.SMTP(host=mx_host, timeout=timeout) as smtp:
-            smtp_response = smtp.helo()[1].decode('utf-8', errors='ignore')
+            smtp_response = smtp.helo()[1].decode("utf-8", errors="ignore")
             smtp.mail(sender)
 
             # Send RCPT TO - this checks if mailbox exists
@@ -90,14 +111,24 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
             elif code == 550:
                 # Could be "mailbox doesn't exist" OR "domain blocks verification"
                 # Check if it's a major provider that blocks verification
-                major_providers = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
-                                 'aol.com', 'icloud.com', 'live.com', 'msn.com']
+                major_providers = [
+                    "gmail.com",
+                    "yahoo.com",
+                    "hotmail.com",
+                    "outlook.com",
+                    "aol.com",
+                    "icloud.com",
+                    "live.com",
+                    "msn.com",
+                ]
                 if any(provider in domain.lower() for provider in major_providers):
                     # Major provider blocking verification - assume valid
                     mailbox_exists = True
                     smtp_status = "unverifiable"
                     confidence = "medium"
-                    errors.append(f"Provider blocks verification (code {code}) - assuming valid")
+                    errors.append(
+                        f"Provider blocks verification (code {code}) - assuming valid"
+                    )
                 else:
                     # Smaller domain, likely invalid
                     mailbox_exists = False
@@ -109,7 +140,9 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
                 mailbox_exists = True
                 smtp_status = "unverifiable"
                 confidence = "low"
-                errors.append(f"Service unavailable (code {code}) - assuming valid")
+                errors.append(
+                    f"Service unavailable (code {code}) - assuming valid"
+                )
             else:
                 # Unknown code - be conservative and assume valid
                 mailbox_exists = True
@@ -117,9 +150,16 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
                 confidence = "low"
                 errors.append(f"Unknown SMTP code {code} - assuming valid")
 
-    except (smtplib.SMTPServerDisconnected, smtplib.SMTPResponseException,
-            socket.timeout, socket.gaierror, ConnectionRefusedError, Exception) as e:
-        # Network/connection errors - assume valid (don't penalize for our connection issues)
+    except (
+        smtplib.SMTPServerDisconnected,
+        smtplib.SMTPResponseException,
+        socket.timeout,
+        socket.gaierror,
+        ConnectionRefusedError,
+        Exception,
+    ) as e:
+        # Network/connection errors - assume valid (don't penalize for our
+        # connection issues).
         mailbox_exists = True
         smtp_status = "unverifiable"
         confidence = "low"
@@ -133,7 +173,7 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
         "confidence": confidence,  # high, medium, low
         "smtp_response": smtp_response[:200],  # Limit response length
         "errors": errors,
-        "skipped": False
+        "skipped": False,
     }
 
 
@@ -185,32 +225,38 @@ def validate_smtp_batch(emails: List[str], max_workers: int = 50, timeout: int =
     return results
 
 
-def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
-                                      timeout: int = 3, sender: Optional[str] = None,
-                                      progress_callback=None) -> Dict[str, Dict[str, Any]]:
-    """
-    Validate multiple emails concurrently with progress tracking
+def validate_smtp_batch_with_progress(
+    emails: List[str],
+    max_workers: int = 50,
+    timeout: int = 3,
+    sender: Optional[str] = None,
+    progress_callback=None,
+    email_domain_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Validate multiple emails concurrently with progress tracking.
 
-    Args:
-        emails: List of email addresses to validate
-        max_workers: Number of concurrent SMTP connections (default: 50)
-        timeout: SMTP connection timeout per email (default: 3s)
-        sender: Email address to use as sender
-        progress_callback: Optional function(completed, total) to track progress
-
-    Returns:
-        Dictionary mapping email -> validation result
+    ``email_domain_map`` lets us pass in the domain/DNS results from phase 1 so
+    we don't redo DNS resolution work inside each worker thread.
     """
-    results = {}
+    results: Dict[str, Dict[str, Any]] = {}
     total = len(emails)
     completed = 0
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_email = {
-            executor.submit(validate_smtp_single, email, timeout, sender): email 
-            for email in emails
-        }
-        
+        future_to_email: Dict[Any, str] = {}
+        for email in emails:
+            domain_info = (
+                email_domain_map.get(email) if email_domain_map is not None else None
+            )
+            future = executor.submit(
+                validate_smtp_single,
+                email,
+                timeout,
+                sender,
+                domain_info,
+            )
+            future_to_email[future] = email
+
         for future in as_completed(future_to_email):
             email = future_to_email[future]
             try:
@@ -221,9 +267,11 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
                     "email": email,
                     "valid": False,
                     "mailbox_exists": False,
+                    "smtp_status": "unknown",
+                    "confidence": "low",
                     "smtp_response": "",
                     "errors": [f"Thread error: {str(e)}"],
-                    "skipped": False
+                    "skipped": False,
                 }
 
             completed += 1

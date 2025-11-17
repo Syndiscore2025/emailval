@@ -144,7 +144,27 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
             f"syntax/domain/type checks..."
         )
 
-        print(f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated")
+        print(
+            f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated"
+        )
+
+        # Build a mapping of email -> domain info from phase 1 so the SMTP
+        # phase can reuse DNS/MX results instead of repeating DNS lookups in
+        # every worker thread. This reduces external DNS load and makes the
+        # SMTP phase more predictable on Render.
+        email_domain_map: Dict[str, Dict[str, Any]] = {}
+        for result in validation_results:
+            email = result.get("email")
+            if not email:
+                continue
+            domain_checks = result.get("checks", {}).get("domain", {})
+            email_domain_map[email] = {
+                "valid": domain_checks.get("valid", False),
+                "has_mx": domain_checks.get("has_mx", False),
+                "has_a": domain_checks.get("has_a", False),
+                "mx_records": domain_checks.get("mx_records", []),
+                "errors": domain_checks.get("errors", []),
+            }
 
         # ---------------------------------
         # Phase 2: SMTP checks with progress
@@ -184,9 +204,12 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
 
         max_smtp_workers_env = os.getenv("SMTP_MAX_WORKERS")
         try:
-            max_smtp_workers = int(max_smtp_workers_env) if max_smtp_workers_env else 50
+            # Default to a conservative number of workers; we already do DNS in
+            # phase 1, so extremely high SMTP concurrency mainly increases the
+            # chance of remote throttling/timeouts on providers like Gmail.
+            max_smtp_workers = int(max_smtp_workers_env) if max_smtp_workers_env else 20
         except (TypeError, ValueError):
-            max_smtp_workers = 50
+            max_smtp_workers = 20
 
         if max_smtp_workers < 1:
             max_smtp_workers = 1
@@ -199,7 +222,9 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker):
             emails_to_validate,
             max_workers=max_smtp_workers,
             timeout=3,
+            sender=None,
             progress_callback=progress_callback,
+            email_domain_map=email_domain_map,
         )
         print(f"[BACKGROUND] SMTP batch complete, got {len(smtp_results)} results")
 
