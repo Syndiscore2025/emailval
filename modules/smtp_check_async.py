@@ -65,9 +65,11 @@ def validate_smtp_single(email: str, timeout: int = 3, sender: Optional[str] = N
     confidence = "low"  # low, medium, high
 
     try:
-        # Connect to SMTP server with reduced timeout
+        # Connect to SMTP server with timeout
+        # CRITICAL: Must pass host to constructor OR timeout to connect()
+        # Otherwise connect() will hang indefinitely!
         with smtplib.SMTP(timeout=timeout) as smtp:
-            smtp.connect(mx_host)
+            smtp.connect(mx_host, timeout=timeout)
             smtp_response = smtp.helo()[1].decode('utf-8', errors='ignore')
             smtp.mail(sender)
 
@@ -214,8 +216,20 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
         for future in as_completed(future_to_email):
             email = future_to_email[future]
             try:
-                result = future.result()
+                # Add timeout to prevent indefinite hangs
+                # Timeout should be slightly longer than SMTP timeout to allow for completion
+                result = future.result(timeout=timeout + 2)
                 results[email] = result
+            except TimeoutError:
+                # Future timed out - mark as unverifiable
+                results[email] = {
+                    "email": email,
+                    "valid": True,  # Don't penalize for timeout
+                    "mailbox_exists": True,
+                    "smtp_response": "",
+                    "errors": [f"Validation timeout after {timeout + 2}s - assuming valid"],
+                    "skipped": False
+                }
             except Exception as e:
                 results[email] = {
                     "email": email,
@@ -225,7 +239,7 @@ def validate_smtp_batch_with_progress(emails: List[str], max_workers: int = 50,
                     "errors": [f"Thread error: {str(e)}"],
                     "skipped": False
                 }
-            
+
             completed += 1
             if progress_callback:
                 progress_callback(completed, total)
