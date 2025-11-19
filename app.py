@@ -112,6 +112,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
 
             completed_precheck = i + 1
 
+
             # Decide whether to push a progress update
             should_update = False
             if completed_precheck % UPDATE_BATCH_SIZE == 0:
@@ -606,6 +607,15 @@ def index():
 def admin_dashboard():
     """Render admin dashboard"""
     return render_template('admin/dashboard.html')
+
+
+@app.route('/developer', methods=['GET'])
+@require_api_key
+def developer_options():
+    """Developer & API options view"""
+    # Use request.url_root so the endpoint shown in the UI matches the current host
+    api_base_url = request.url_root
+    return render_template('developer.html', api_base_url=api_base_url)
 
 
 @app.route('/admin/login', methods=['GET', 'POST'])

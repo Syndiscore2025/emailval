@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Developer & API Options - Email Validator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="top-nav">
+            <div class="brand">
+                <div class="brand-icon"></div>
+                <div class="brand-text">Email Validator</div>
+            </div>
+            <nav class="nav-tabs">
+                <button class="nav-tab" onclick="window.location.href='/'">Bulk Validation</button>
+                <button class="nav-tab" onclick="window.location.href='/admin/analytics'">Analytics</button>
+                <button class="nav-tab" onclick="window.location.href='/admin'">Admin</button>
+                <button class="nav-tab" onclick="window.location.href='/admin/settings'">Settings</button>
+            </nav>
+        </header>
+        <main class="main-content">
+            <div class="container">
+                <header class="header">
+                    <h1>Developer & API Options</h1>
+                    <p>Use the webhook endpoint to plug validation into your CRM or backend workflows.</p>
+                </header>
+
+                <div class="card">
+                    <h2 class="card-title">Webhook Endpoint</h2>
+                    <p class="mb-3" style="color: var(--text-muted);">Call this endpoint from your CRM or backend system.</p>
+                    <div class="mb-3">
+                        <label style="color: var(--text-muted); font-size: 0.875rem;">Endpoint</label>
+                        <div class="code-block" style="margin-top: 0.5rem;">
+                            POST {{ api_base_url }}api/webhook/validate
+                        </div>
+                    </div>
+                    <p style="color: var(--text-muted); font-size: 0.875rem;">Supports file upload, webhook callbacks, and automated processing.</p>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">Validation Modes</h2>
+                    <ul class="mb-3" style="color: var(--text-muted); font-size: 0.875rem;">
+                        <li>Default: fast syntax + domain/DNS/MX + type checks.</li>
+                        <li>Optional: SMTP mailbox verification when enabled via environment and requested by the caller.</li>
+                    </ul>
+                    <p style="color: var(--text-muted); font-size: 0.875rem;">
+                        SMTP mailbox checks are controlled by the <code>SMTP_ENABLED</code> environment variable
+                        and the <code>include_smtp</code> flag in your requests.
+                    </p>
+                </div>
+            </div>
+        </main>
+        <footer class="footer">
+            <div class="footer-text">Email Validator &ndash; Developer & API documentation</div>
+        </footer>
+    </div>
+</body>
+</html>
+
