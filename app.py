@@ -142,16 +142,15 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
 
                 # Map phase 1 progress into the appropriate portion of the bar.
                 # If include_smtp is False, PRECHECK_WEIGHT will be 1.0 so this covers 0-100%.
-                if include_smtp:
+                if effective_include_smtp:
                     progress_fraction = PRECHECK_WEIGHT * (completed_precheck / total_emails)
                 else:
                     progress_fraction = completed_precheck / total_emails
 
-                effective_validated = int(total_emails * progress_fraction)
-
+                # Update job tracker with actual count of emails processed so far
                 job_tracker.update_progress(
                     job_id,
-                    effective_validated,
+                    completed_precheck,  # Actual count, not weighted fraction
                     valid,
                     invalid,
                     disposable,
