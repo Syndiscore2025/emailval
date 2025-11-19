@@ -76,8 +76,22 @@ All tests should pass ✅
 **Test File**: Create `test_phase4.py`
 
 ### Phase 6: Analytics Dashboard (DO SECOND)
-**Files to Create**: 
+**Files to Create**:
 - `templates/admin/analytics.html`
+
+### SMTP feature flag
+
+The app keeps SMTP mailbox verification as an optional, advanced layer on top of syntax/domain/type checks.
+
+```bash
+# Optional - enable SMTP mailbox verification (default is disabled)
+SMTP_ENABLED=false
+```
+
+- When `SMTP_ENABLED=false` (default), all validations use fast syntax + domain/DNS/MX + type checks only.
+- When `SMTP_ENABLED=true`, callers that explicitly request `include_smtp=true` (UI, API, CRM, admin flows)
+  will also run the SMTP mailbox verification phase.
+
 - `static/js/analytics.js`
 - `modules/reporting.py`
 
@@ -183,6 +197,10 @@ git status
 git add .
 git commit -m "Descriptive message"
 git push origin main
+
+# Render deployment flow:
+# - Pushing to main triggers Render auto-deploy
+# - Wait for deploy to complete, then test on the live Render URL
 ```
 
 ### Start Server
@@ -374,8 +392,8 @@ git push origin main
 
 ---
 
-**Repository**: https://github.com/Syndiscore2025/emailval.git  
-**Working Dir**: c:\Users\micha\emailval\emailval  
+**Repository**: https://github.com/Syndiscore2025/emailval.git
+**Working Dir**: c:\Users\micha\emailval\emailval
 **Branch**: main
 
 **You got this! 🚀**

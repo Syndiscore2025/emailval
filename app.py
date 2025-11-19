@@ -51,17 +51,25 @@ from modules.obvious_invalid import is_obviously_invalid
 
 app = Flask(__name__)
 
+# Global feature flag: controls whether SMTP verification is available anywhere in the app
+SMTP_ENABLED = os.getenv("SMTP_ENABLED", "false").lower() == "true"
+
+
 
 def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_smtp: bool = True):
     """Run validation in background thread with real-time progress.
 
-    When include_smtp is False, only fast pre-checks (syntax/domain/type) are run
-    and the progress bar maps directly 0–100% to those checks.
+    When SMTP is disabled or include_smtp is False, only fast pre-checks
+    (syntax/domain/type) are run and the progress bar maps directly 0–100%
+    to those checks.
     """
     job_tracker = get_job_tracker()
     validation_results = []
 
-    # Treat validation as one or two phases depending on include_smtp:
+    # Honor global SMTP feature flag: if disabled, force pre-check-only mode.
+    effective_include_smtp = include_smtp and SMTP_ENABLED
+
+    # Treat validation as one or two phases depending on effective_include_smtp:
     #  - Phase 1: syntax / domain / type checks (always)
     #  - Phase 2: SMTP checks in parallel (optional)
     total_emails = len(emails_to_validate)
@@ -69,7 +77,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
         job_tracker.complete_job(job_id, success=True)
         return
 
-    if include_smtp:
+    if effective_include_smtp:
         PRECHECK_WEIGHT = 0.4
         SMTP_WEIGHT = 0.6
     else:
@@ -167,8 +175,8 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated"
         )
 
-        # If SMTP is disabled for this job, we can finish after pre-checks.
-        if not include_smtp:
+        # If SMTP is disabled for this job (or globally), we can finish after pre-checks.
+        if not effective_include_smtp:
             final_valid = sum(1 for r in validation_results if r.get("valid", False))
             final_invalid = total_emails - final_valid
 
@@ -201,7 +209,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
                 "session_type": job_session_info.get("session_type", "bulk"),
                 "files_processed": job_session_info.get("files_processed"),
                 "filenames": job_session_info.get("filenames"),
-                "include_smtp": include_smtp,
+                "include_smtp": effective_include_smtp,
                 "duration_ms": duration_ms,
             }
             tracker.track_emails(emails_to_validate, validation_results, session_info)
@@ -341,7 +349,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             "session_type": job_session_info.get("session_type", "bulk"),
             "files_processed": job_session_info.get("files_processed"),
             "filenames": job_session_info.get("filenames"),
-            "include_smtp": include_smtp,
+            "include_smtp": effective_include_smtp,
             "duration_ms": duration_ms,
         }
         tracker.track_emails(emails_to_validate, validation_results, session_info)
@@ -558,8 +566,8 @@ def validate_email_complete(email: str, include_smtp: bool = False) -> Dict[str,
         }
     }
 
-    # Optional SMTP check
-    if include_smtp and is_valid:
+    # Optional SMTP check (only if globally enabled)
+    if SMTP_ENABLED and include_smtp and is_valid:
         smtp_result = validate_smtp(email, timeout=10)
         checks["smtp"] = {
             "valid": smtp_result["valid"],
