@@ -127,12 +127,17 @@ class EmailTracker:
                 checks = result.get('checks', {})
                 type_checks = checks.get('type', {})
 
+                # Extract SMTP verification status
+                smtp_checks = checks.get('smtp', {})
+                smtp_verified = smtp_checks.get('mailbox_exists', False) and not smtp_checks.get('skipped', True)
+
                 flattened_result = {
                     'email': result.get('email', ''),
                     'valid': result.get('valid', False),
                     'type': type_checks.get('email_type', 'unknown'),
                     'is_disposable': type_checks.get('is_disposable', False),
                     'is_role_based': type_checks.get('is_role_based', False),
+                    'smtp_verified': smtp_verified,
                     'checks': checks
                 }
                 validation_lookup[email_key] = flattened_result
@@ -153,6 +158,7 @@ class EmailTracker:
                     record["type"] = validation_data.get('type', 'unknown')
                     record["is_disposable"] = validation_data.get('is_disposable', False)
                     record["is_role_based"] = validation_data.get('is_role_based', False)
+                    record["smtp_verified"] = validation_data.get('smtp_verified', False)
                     record["last_validated"] = timestamp
                     record["validation_count"] = record.get("validation_count", 0) + 1
 
@@ -178,6 +184,7 @@ class EmailTracker:
                 if validation_data:
                     email_record["valid"] = validation_data.get('valid', False)
                     email_record["type"] = validation_data.get('type', 'unknown')
+                    email_record["smtp_verified"] = validation_data.get('smtp_verified', False)
                     email_record["is_disposable"] = validation_data.get('is_disposable', False)
                     email_record["is_role_based"] = validation_data.get('is_role_based', False)
                     email_record["last_validated"] = timestamp
@@ -191,6 +198,7 @@ class EmailTracker:
                 else:
                     email_record["valid"] = None
                     email_record["type"] = "unknown"
+                    email_record["smtp_verified"] = False
                     email_record["is_disposable"] = False
                     email_record["is_role_based"] = False
                     email_record["last_validated"] = None

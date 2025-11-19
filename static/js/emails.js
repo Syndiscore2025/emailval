@@ -109,7 +109,7 @@ function renderEmails() {
     const pageEmails = filteredEmails.slice(startIdx, endIdx);
 
     if (pageEmails.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center;">No emails found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center;">No emails found</td></tr>';
         return;
     }
 
@@ -119,6 +119,7 @@ function renderEmails() {
             <td><span class="status-badge ${email.status}">${email.status}</span></td>
             <td>${email.type || 'N/A'}</td>
             <td>${email.domain || 'N/A'}</td>
+            <td><span class="smtp-badge ${email.smtp_verified ? 'yes' : 'no'}">${email.smtp_verified ? 'Yes' : 'No'}</span></td>
             <td>${formatDate(email.first_seen)}</td>
             <td>${formatDate(email.last_validated)}</td>
             <td>${email.validation_count || 0}</td>
@@ -453,7 +454,7 @@ function hideEmailDetails() {
  * Export emails to CSV
  */
 function exportEmails() {
-    const csv = ['Email,Status,Type,Domain,First Seen,Last Validated,Validation Count'];
+    const csv = ['Email,Status,Type,Domain,SMTP Verified,First Seen,Last Validated,Validation Count'];
 
     filteredEmails.forEach(email => {
         csv.push([
@@ -461,6 +462,7 @@ function exportEmails() {
             email.status,
             email.type || '',
             email.domain || '',
+            email.smtp_verified ? 'Yes' : 'No',
             email.first_seen,
             email.last_validated,
             email.validation_count || 0
@@ -513,6 +515,6 @@ function escapeHtml(text) {
 
 function showError(message) {
     const tbody = document.getElementById('emails-tbody');
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: red;">${escapeHtml(message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: red;">${escapeHtml(message)}</td></tr>`;
 }
 

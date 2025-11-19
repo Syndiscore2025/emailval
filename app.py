@@ -742,6 +742,7 @@ def get_emails():
                 'status': status,
                 'type': data.get('type', 'unknown'),
                 'domain': email.split('@')[1] if '@' in email else '',
+                'smtp_verified': data.get('smtp_verified', False),
                 'first_seen': data.get('first_seen', ''),
                 'last_validated': data.get('last_validated', ''),
                 'validation_count': data.get('validation_count', 0)
@@ -908,6 +909,8 @@ def get_database_stats():
     """Get database statistics"""
     try:
         tracker = get_tracker()
+        # Force reload from disk to get fresh data
+        tracker.data = tracker._load_database()
         stats = tracker.get_stats()
 
         # Calculate database size
@@ -2245,6 +2248,8 @@ def get_analytics_data():
     Returns KPIs, trends, and domain statistics from real data.
     """
     tracker = get_tracker()
+    # Force reload from disk to get fresh data
+    tracker.data = tracker._load_database()
     stats = tracker.get_stats()
 
     # Get email data

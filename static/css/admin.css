@@ -284,6 +284,24 @@ body {
     color: #721c24;
 }
 
+/* SMTP Verification Badge */
+.smtp-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.smtp-badge.yes {
+    background: #d4edda;
+    color: #155724;
+}
+
+.smtp-badge.no {
+    background: #f8d7da;
+    color: #721c24;
+}
+
 /* Modal */
 .modal {
     display: none;
