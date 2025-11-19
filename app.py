@@ -717,6 +717,9 @@ def get_emails():
     """Get all emails from database"""
     try:
         tracker = get_tracker()
+        # Force reload from disk to get fresh data (fixes singleton caching issue)
+        tracker.data = tracker._load_database()
+
         emails_data = []
 
         for email, data in tracker.data.get('emails', {}).items():
