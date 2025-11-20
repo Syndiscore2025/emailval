@@ -1876,6 +1876,53 @@ def webhook_validate():
 
             results.append(result)
 
+        # Run catch-all detection if SMTP was enabled
+        if include_smtp:
+            print(f"[CRM] Running catch-all detection for {len(emails)} emails...")
+
+            # Build email-to-domain map for catch-all detection
+            from modules.utils import extract_domain
+            email_domain_map = {}
+            for result in results:
+                email = result.get("email")
+                if not email:
+                    continue
+                domain = extract_domain(email)
+                if domain and result.get("checks", {}).get("domain", {}).get("valid"):
+                    mx_records = result.get("checks", {}).get("domain", {}).get("mx_records", [])
+                    if mx_records:
+                        email_domain_map[email] = {
+                            "domain": domain,
+                            "mx_records": mx_records
+                        }
+
+            # Check catch-all status for unique domains
+            catchall_results = check_catchall_for_domains(
+                email_domain_map,
+                timeout=3,
+                sender=None
+            )
+            print(f"[CRM] Catch-all check complete for {len(catchall_results)} domains")
+
+            # Merge catch-all results into validation results
+            for result in results:
+                email = result.get("email")
+                if not email:
+                    continue
+                domain = extract_domain(email)
+                if domain and domain in catchall_results:
+                    catchall_data = catchall_results[domain]
+                    result.setdefault("checks", {})["catchall"] = {
+                        "is_catchall": catchall_data.get("is_catchall", False),
+                        "confidence": catchall_data.get("confidence", "low"),
+                        "errors": catchall_data.get("errors", [])
+                    }
+
+                    if catchall_data.get("is_catchall") and catchall_data.get("confidence") == "high":
+                        result.setdefault("warnings", []).append(
+                            "Domain is catch-all - mailbox existence cannot be verified"
+                        )
+
         # Track these emails so admin explorer stays in sync with CRM validations
         duration_ms = int((datetime.now() - crm_session_start).total_seconds() * 1000)
         tracker.track_emails(

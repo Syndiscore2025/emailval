@@ -73,12 +73,23 @@ def build_crm_response(
         email = result.get('email', '').strip().lower()
         crm_record = email_to_record.get(email, {})
 
+        # Extract catch-all status
+        catchall_checks = result.get('checks', {}).get('catchall', {})
+        is_catchall = catchall_checks.get('is_catchall', False)
+        catchall_confidence = catchall_checks.get('confidence', 'low')
+
         enriched = {
             'email': result.get('email'),
             'status': 'valid' if result.get('valid') else 'invalid',
             'checks': result.get('checks', {}),
             'errors': result.get('errors', []),
+            'is_catchall': is_catchall,
+            'catchall_confidence': catchall_confidence,
         }
+
+        # Add warnings if present
+        if result.get('warnings'):
+            enriched['warnings'] = result.get('warnings', [])
 
         # Add CRM-specific identifiers
         if crm_record:
@@ -90,11 +101,14 @@ def build_crm_response(
 
         records.append(enriched)
 
-    # Build summary
+    # Build summary with catch-all count
+    catchall_count = sum(1 for r in records if r.get('is_catchall', False))
+
     summary = {
         'total': len(records),
         'valid': sum(1 for r in records if r['status'] == 'valid'),
         'invalid': sum(1 for r in records if r['status'] == 'invalid'),
+        'catchall': catchall_count,
     }
 
     response = {
