@@ -30,7 +30,7 @@ from modules.syntax_check import validate_syntax
 from modules.domain_check import validate_domain
 from modules.type_check import validate_type
 from modules.smtp_check import validate_smtp
-from modules.smtp_check_async import validate_smtp_batch, validate_smtp_batch_with_progress
+from modules.smtp_check_async import validate_smtp_batch, validate_smtp_batch_with_progress, check_catchall_for_domains
 from modules.file_parser import parse_file
 from modules.utils import normalize_email, create_validation_result, calculate_deliverability_score, get_deliverability_rating
 from modules.email_tracker import get_tracker
@@ -298,6 +298,15 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
         )
         print(f"[BACKGROUND] SMTP batch complete, got {len(smtp_results)} results")
 
+        # Check for catch-all domains (done once per domain, not per email)
+        print(f"[BACKGROUND] Checking for catch-all domains...")
+        catchall_results = check_catchall_for_domains(
+            email_domain_map,
+            timeout=3,
+            sender=None
+        )
+        print(f"[BACKGROUND] Catch-all check complete for {len(catchall_results)} domains")
+
         # Merge SMTP results into validation results
         for i, result in enumerate(validation_results):
             email = result["email"]
@@ -313,6 +322,24 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
                 # Update overall validity based on SMTP
                 if not smtp_data.get("skipped", False):
                     result["valid"] = result["valid"] and smtp_data.get("valid", False)
+
+            # Add catch-all information (domain-level, not email-level)
+            from modules.utils import extract_domain
+            domain = extract_domain(email)
+            if domain and domain in catchall_results:
+                catchall_data = catchall_results[domain]
+                result["checks"]["catchall"] = {
+                    "is_catchall": catchall_data.get("is_catchall", False),
+                    "confidence": catchall_data.get("confidence", "low"),
+                    "errors": catchall_data.get("errors", [])
+                }
+
+                # If domain is catch-all with high confidence, mark email validity as uncertain
+                if catchall_data.get("is_catchall") and catchall_data.get("confidence") == "high":
+                    # Don't mark as invalid, but add a warning
+                    result.setdefault("warnings", []).append(
+                        "Domain is catch-all - mailbox existence cannot be verified"
+                    )
 
         # After merging SMTP results, compute final stats and push one last update
         final_valid = sum(1 for r in validation_results if r.get("valid", False))
@@ -746,6 +773,8 @@ def get_emails():
                 'type': data.get('type', 'unknown'),
                 'domain': email.split('@')[1] if '@' in email else '',
                 'smtp_verified': data.get('smtp_verified', False),
+                'is_catchall': data.get('is_catchall', False),
+                'catchall_confidence': data.get('catchall_confidence', 'low'),
                 'first_seen': data.get('first_seen', ''),
                 'last_validated': data.get('last_validated', ''),
                 'validation_count': data.get('validation_count', 0)

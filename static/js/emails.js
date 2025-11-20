@@ -109,17 +109,29 @@ function renderEmails() {
     const pageEmails = filteredEmails.slice(startIdx, endIdx);
 
     if (pageEmails.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center;">No emails found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center;">No emails found</td></tr>';
         return;
     }
 
-    tbody.innerHTML = pageEmails.map(email => `
+    tbody.innerHTML = pageEmails.map(email => {
+        // Catch-all badge
+        let catchallBadge = '';
+        if (email.is_catchall) {
+            const confidenceClass = email.catchall_confidence === 'high' ? 'high' :
+                                   email.catchall_confidence === 'medium' ? 'medium' : 'low';
+            catchallBadge = `<span class="catchall-badge ${confidenceClass}" title="Catch-all domain (${email.catchall_confidence} confidence)">⚠️ Catch-All</span>`;
+        } else {
+            catchallBadge = '<span class="catchall-badge no">No</span>';
+        }
+
+        return `
         <tr>
             <td><code>${escapeHtml(email.email)}</code></td>
             <td><span class="status-badge ${email.status}">${email.status}</span></td>
             <td>${email.type || 'N/A'}</td>
             <td>${email.domain || 'N/A'}</td>
             <td><span class="smtp-badge ${email.smtp_verified ? 'yes' : 'no'}">${email.smtp_verified ? 'Yes' : 'No'}</span></td>
+            <td>${catchallBadge}</td>
             <td>${formatDate(email.first_seen)}</td>
             <td>${formatDate(email.last_validated)}</td>
             <td>${email.validation_count || 0}</td>
@@ -129,7 +141,8 @@ function renderEmails() {
                 ${email.status === 'disposable' ? `<button class="btn-danger-sm" onclick="deleteEmailWrapper('${encodeURIComponent(email.email)}')">Delete</button>` : ''}
             </td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
 
     // Update pagination
     document.getElementById('current-page').textContent = currentPage;
@@ -143,6 +156,13 @@ function renderEmails() {
  */
 function showEmailDetails(email) {
     const content = document.getElementById('email-details-content');
+
+    // Catch-all status display
+    let catchallDisplay = 'No';
+    if (email.is_catchall) {
+        catchallDisplay = `<span class="catchall-badge ${email.catchall_confidence}" title="Domain accepts all emails">⚠️ Yes (${email.catchall_confidence} confidence)</span>`;
+    }
+
     content.innerHTML = `
         <div class="detail-grid">
             <div class="detail-row">
@@ -160,6 +180,14 @@ function showEmailDetails(email) {
             <div class="detail-row">
                 <strong>Domain:</strong>
                 <span>${email.domain || 'N/A'}</span>
+            </div>
+            <div class="detail-row">
+                <strong>SMTP Verified:</strong>
+                <span class="smtp-badge ${email.smtp_verified ? 'yes' : 'no'}">${email.smtp_verified ? 'Yes' : 'No'}</span>
+            </div>
+            <div class="detail-row">
+                <strong>Catch-All Domain:</strong>
+                <span>${catchallDisplay}</span>
             </div>
             <div class="detail-row">
                 <strong>First Seen:</strong>

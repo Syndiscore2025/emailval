@@ -10,6 +10,11 @@ from typing import Dict, Any, Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .utils import extract_domain
 from .domain_check import validate_domain
+from .catchall_check import check_catchall_domain
+
+# Domain-level catch-all cache (domain -> catch-all result)
+# This prevents redundant catch-all checks for the same domain
+_CATCHALL_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def validate_smtp_single(
@@ -223,6 +228,76 @@ def validate_smtp_batch(emails: List[str], max_workers: int = 50, timeout: int =
                 }
     
     return results
+
+
+def check_catchall_for_domains(
+    email_domain_map: Dict[str, Dict[str, Any]],
+    timeout: int = 3,
+    sender: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
+    """Check catch-all status for unique domains in the email list
+
+    This is done ONCE per domain (not per email) to optimize performance.
+    Results are cached in _CATCHALL_CACHE.
+
+    Args:
+        email_domain_map: Map of email -> domain info (from phase 1)
+        timeout: SMTP connection timeout
+        sender: Email address to use as sender
+
+    Returns:
+        Dictionary mapping domain -> catch-all result
+    """
+    catchall_results = {}
+
+    # Extract unique domains from email list
+    unique_domains = {}
+    for email, domain_info in email_domain_map.items():
+        domain = extract_domain(email)
+        if domain and domain not in unique_domains:
+            unique_domains[domain] = domain_info
+
+    print(f"[CATCHALL] Checking {len(unique_domains)} unique domains for catch-all status...")
+
+    for domain, domain_info in unique_domains.items():
+        # Check cache first
+        if domain in _CATCHALL_CACHE:
+            catchall_results[domain] = _CATCHALL_CACHE[domain]
+            continue
+
+        # Skip if domain has no valid MX records
+        if not domain_info.get("valid", False):
+            catchall_results[domain] = {
+                "is_catchall": False,
+                "confidence": "low",
+                "errors": ["Domain not valid - skipping catch-all check"]
+            }
+            continue
+
+        # Get MX host
+        mx_records = domain_info.get("mx_records", [])
+        if mx_records:
+            mx_host = mx_records[0].rstrip(".")
+        else:
+            mx_host = domain
+
+        # Perform catch-all check
+        try:
+            result = check_catchall_domain(domain, mx_host, timeout, sender, num_tests=2)
+            catchall_results[domain] = result
+            _CATCHALL_CACHE[domain] = result  # Cache for future use
+
+            if result.get("is_catchall"):
+                print(f"[CATCHALL] ⚠️  {domain} is CATCH-ALL (confidence: {result.get('confidence')})")
+        except Exception as e:
+            catchall_results[domain] = {
+                "is_catchall": False,
+                "confidence": "low",
+                "errors": [f"Catch-all check failed: {str(e)[:100]}"]
+            }
+
+    print(f"[CATCHALL] Completed catch-all checks for {len(unique_domains)} domains")
+    return catchall_results
 
 
 def validate_smtp_batch_with_progress(

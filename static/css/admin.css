@@ -302,6 +302,37 @@ body {
     color: #721c24;
 }
 
+/* Catch-All Badge */
+.catchall-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.catchall-badge.high {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffc107;
+}
+
+.catchall-badge.medium {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #17a2b8;
+}
+
+.catchall-badge.low {
+    background: #e2e3e5;
+    color: #383d41;
+    border: 1px solid #6c757d;
+}
+
+.catchall-badge.no {
+    background: #d4edda;
+    color: #155724;
+}
+
 /* Modal */
 .modal {
     display: none;

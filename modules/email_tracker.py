@@ -131,6 +131,11 @@ class EmailTracker:
                 smtp_checks = checks.get('smtp', {})
                 smtp_verified = smtp_checks.get('mailbox_exists', False) and not smtp_checks.get('skipped', True)
 
+                # Extract catch-all status
+                catchall_checks = checks.get('catchall', {})
+                is_catchall = catchall_checks.get('is_catchall', False)
+                catchall_confidence = catchall_checks.get('confidence', 'low')
+
                 flattened_result = {
                     'email': result.get('email', ''),
                     'valid': result.get('valid', False),
@@ -138,6 +143,8 @@ class EmailTracker:
                     'is_disposable': type_checks.get('is_disposable', False),
                     'is_role_based': type_checks.get('is_role_based', False),
                     'smtp_verified': smtp_verified,
+                    'is_catchall': is_catchall,
+                    'catchall_confidence': catchall_confidence,
                     'checks': checks
                 }
                 validation_lookup[email_key] = flattened_result
@@ -159,6 +166,8 @@ class EmailTracker:
                     record["is_disposable"] = validation_data.get('is_disposable', False)
                     record["is_role_based"] = validation_data.get('is_role_based', False)
                     record["smtp_verified"] = validation_data.get('smtp_verified', False)
+                    record["is_catchall"] = validation_data.get('is_catchall', False)
+                    record["catchall_confidence"] = validation_data.get('catchall_confidence', 'low')
                     record["last_validated"] = timestamp
                     record["validation_count"] = record.get("validation_count", 0) + 1
 
@@ -187,6 +196,8 @@ class EmailTracker:
                     email_record["smtp_verified"] = validation_data.get('smtp_verified', False)
                     email_record["is_disposable"] = validation_data.get('is_disposable', False)
                     email_record["is_role_based"] = validation_data.get('is_role_based', False)
+                    email_record["is_catchall"] = validation_data.get('is_catchall', False)
+                    email_record["catchall_confidence"] = validation_data.get('catchall_confidence', 'low')
                     email_record["last_validated"] = timestamp
 
                     if email_record["valid"] is True:
@@ -201,6 +212,8 @@ class EmailTracker:
                     email_record["smtp_verified"] = False
                     email_record["is_disposable"] = False
                     email_record["is_role_based"] = False
+                    email_record["is_catchall"] = False
+                    email_record["catchall_confidence"] = "low"
                     email_record["last_validated"] = None
                     email_record["status"] = "unknown"
 
