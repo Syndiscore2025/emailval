@@ -371,7 +371,8 @@ async function uploadFiles() {
                                 total: progress.total_emails || 0,
                                 disposable: progress.disposable_count || 0,
                                 role_based: progress.role_based_count || 0,
-                                personal: progress.personal_count || 0
+                                personal: progress.personal_count || 0,
+                                catchall: progress.catchall_count || 0
                             }
                         };
 
@@ -521,7 +522,8 @@ function startJobStatusPolling(jobId, initialData) {
                             total: total,
                             disposable: disposableCount,
                             role_based: progress.role_based_count || 0,
-                            personal: progress.personal_count || 0
+                            personal: progress.personal_count || 0,
+                            catchall: progress.catchall_count || 0
                         }
                     };
 
@@ -602,6 +604,17 @@ function displayBulkResults(data) {
                 </div>
             ` : ''}
 
+            <!-- Catch-All Alert -->
+            ${(summary.catchall || 0) > 0 ? `
+                <div class="suggestion-box mb-3" style="background-color: rgba(255, 193, 7, 0.1); border-color: #ffc107;">
+                    <strong style="color: #856404;">⚠️ Catch-All Domains Detected:</strong><br>
+                    <span style="color: var(--text-primary);">
+                        Found <strong>${summary.catchall}</strong> email(s) on catch-all domains. These domains accept all emails regardless of whether the mailbox exists.
+                        <strong>Mailbox existence cannot be verified</strong> for these addresses. Use with caution for B2B cold outreach.
+                    </span>
+                </div>
+            ` : ''}
+
             <!-- Statistics -->
             <div class="stats-grid">
                 <div class="stat-card">
@@ -634,6 +647,12 @@ function displayBulkResults(data) {
                 <div class="stat-card">
                     <div class="stat-value warning">${summary.role_based}</div>
                     <div class="stat-label">Role-Based</div>
+                </div>
+                ` : ''}
+                ${(summary.catchall || 0) > 0 ? `
+                <div class="stat-card" style="border: 2px solid #ffc107;">
+                    <div class="stat-value" style="color: #856404;">⚠️ ${summary.catchall}</div>
+                    <div class="stat-label">Catch-All Domains</div>
                 </div>
                 ` : ''}
             </div>
@@ -680,6 +699,7 @@ function displayBulkResults(data) {
                                         <td>
                                             ${result.checks?.type?.is_disposable ? '<span class="badge badge-warning">Disposable</span> ' : ''}
                                             ${result.checks?.type?.is_role_based ? '<span class="badge badge-warning">Role-Based</span> ' : ''}
+                                            ${result.checks?.catchall?.is_catchall ? '<span class="badge badge-warning" style="background: #fff3cd; color: #856404; border: 1px solid #ffc107;">⚠️ Catch-All</span> ' : ''}
                                             ${result.errors && result.errors.length > 0 ?
                                                 `<span class="text-error" title="${escapeHtml(result.errors.join(', '))}">⚠</span>` : ''}
                                         </td>

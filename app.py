@@ -192,6 +192,9 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             )
             final_personal = final_valid - final_disposable - final_role_based
 
+            # Catch-all is 0 for pre-check only (no SMTP = no catch-all detection)
+            final_catchall = 0
+
             job_tracker.update_progress(
                 job_id,
                 total_emails,
@@ -200,6 +203,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
                 final_disposable,
                 final_role_based,
                 final_personal,
+                final_catchall,
             )
 
             duration_ms = int((time.time() - start_time) * 1000)
@@ -357,6 +361,13 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
         )
         final_personal = final_valid - final_disposable - final_role_based
 
+        # Count catch-all emails
+        final_catchall = sum(
+            1
+            for r in validation_results
+            if r.get("checks", {}).get("catchall", {}).get("is_catchall", False)
+        )
+
         job_tracker.update_progress(
             job_id,
             total_emails,
@@ -365,6 +376,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             final_disposable,
             final_role_based,
             final_personal,
+            final_catchall,
         )
 
         print(f"[BACKGROUND] Parallel SMTP validation complete for job {job_id}")
@@ -1151,6 +1163,7 @@ def stream_job_progress(job_id):
                 "disposable_count": job.get("disposable_count", 0),
                 "role_based_count": job.get("role_based_count", 0),
                 "personal_count": job.get("personal_count", 0),
+                "catchall_count": job.get("catchall_count", 0),
                 "progress_percent": job_tracker.get_progress_percent(job_id),
                 "time_remaining_seconds": job_tracker.estimate_time_remaining(job_id)
             }

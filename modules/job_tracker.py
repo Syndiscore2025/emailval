@@ -66,6 +66,7 @@ class JobTracker:
                 "disposable_count": 0,
                 "role_based_count": 0,
                 "personal_count": 0,
+                "catchall_count": 0,
                 "started_at": datetime.now().isoformat(),
                 "completed_at": None,
                 "session_info": session_info or {},
@@ -77,7 +78,7 @@ class JobTracker:
         return job_id
 
     def update_progress(self, job_id: str, validated_count: int, valid_count: int = None, invalid_count: int = None,
-                         disposable_count: int = None, role_based_count: int = None, personal_count: int = None):
+                         disposable_count: int = None, role_based_count: int = None, personal_count: int = None, catchall_count: int = None):
         """Update job progress with detailed stats"""
         with self.lock:
             # Refresh to merge with any updates written by other workers.
@@ -95,6 +96,8 @@ class JobTracker:
                     self.jobs[job_id]["role_based_count"] = role_based_count
                 if personal_count is not None:
                     self.jobs[job_id]["personal_count"] = personal_count
+                if catchall_count is not None:
+                    self.jobs[job_id]["catchall_count"] = catchall_count
                 if self.jobs[job_id]["status"] == "pending":
                     self.jobs[job_id]["status"] = "running"
                 self._save_jobs()
