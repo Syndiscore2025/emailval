@@ -50,8 +50,15 @@ function filterEmails() {
         }
 
         // Status filter
-        if (statusFilter && email.status !== statusFilter) {
-            return false;
+        if (statusFilter) {
+            if (statusFilter === 'catchall') {
+                // Filter for catch-all emails
+                if (!email.is_catchall) {
+                    return false;
+                }
+            } else if (email.status !== statusFilter) {
+                return false;
+            }
         }
 
         // Type filter
@@ -83,6 +90,7 @@ function updateStats() {
     const disposableCount = allEmails.filter(
         e => e.status === 'disposable' || e.type === 'disposable'
     ).length;
+    const catchallCount = allEmails.filter(e => e.is_catchall === true).length;
 
     document.getElementById('total-count').textContent = allEmails.length;
     document.getElementById('valid-count').textContent = validCount;
@@ -95,6 +103,11 @@ function updateStats() {
     const disposableEl = document.getElementById('disposable-count');
     if (disposableEl) {
         disposableEl.textContent = disposableCount;
+    }
+
+    const catchallEl = document.getElementById('catchall-count');
+    if (catchallEl) {
+        catchallEl.textContent = catchallCount;
     }
 }
 
