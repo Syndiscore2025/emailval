@@ -36,7 +36,17 @@ from modules.utils import normalize_email, create_validation_result, calculate_d
 from modules.email_tracker import get_tracker
 from modules.job_tracker import get_job_tracker
 from modules.api_auth import require_api_key, get_key_manager
-from modules.crm_adapter import parse_crm_request, build_crm_response, get_crm_event_type, validate_crm_vendor
+from modules.crm_adapter import (
+    parse_crm_request,
+    build_crm_response,
+    build_segregated_crm_response,
+    segregate_validation_results,
+    get_crm_event_type,
+    validate_crm_vendor
+)
+from modules.crm_config import get_crm_config_manager
+from modules.lead_manager import get_lead_manager
+from modules.s3_delivery import S3Delivery, S3DeliveryError
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
 from modules.admin_auth import (
     authenticate_admin,
@@ -1988,6 +1998,705 @@ def webhook_validate():
                 pass  # Best effort
 
         return jsonify(error_response), 500
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR CRM S3 DELIVERY
+# ============================================================================
+
+def upload_to_s3(upload_id: str, segregated_lists: Dict[str, List], s3_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Upload segregated lists to S3"""
+    try:
+        s3_delivery = S3Delivery(s3_config)
+        upload_lists = s3_config.get('upload_lists', {})
+
+        s3_results = {}
+
+        # Upload each list type if enabled
+        for list_type, records in segregated_lists.items():
+            should_upload = upload_lists.get(list_type, False)
+
+            # Clean list is always uploaded by default
+            if list_type == 'clean':
+                should_upload = True
+
+            if should_upload and records:
+                result = s3_delivery.upload_list(
+                    upload_id=upload_id,
+                    list_type=list_type,
+                    records=records
+                )
+                s3_results[list_type] = result
+
+        return s3_results
+
+    except S3DeliveryError as e:
+        raise Exception(f"S3 delivery error: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Unexpected S3 error: {str(e)}")
+
+
+def send_crm_callback(callback_url: str, response_data: Dict[str, Any], settings: Dict[str, Any]):
+    """Send callback to CRM webhook"""
+    try:
+        # Build callback payload
+        payload = json.dumps(response_data).encode('utf-8')
+
+        # Create signature if secret is configured
+        signature_secret = settings.get('callback_signature_secret')
+        headers = {'Content-Type': 'application/json'}
+
+        if signature_secret:
+            signature = hmac.new(
+                signature_secret.encode(),
+                payload,
+                hashlib.sha256
+            ).hexdigest()
+            headers['X-Webhook-Signature'] = signature
+
+        # Send POST request
+        req = urllib.request.Request(
+            callback_url,
+            data=payload,
+            headers=headers,
+            method='POST'
+        )
+
+        with urllib.request.urlopen(req, timeout=10) as response:
+            print(f"[CALLBACK] Sent to {callback_url}, status: {response.status}")
+
+    except Exception as e:
+        print(f"[ERROR] Callback delivery failed: {e}")
+
+
+# ============================================================================
+# NEW CRM INTEGRATION ENDPOINTS (Manual & Auto Validation with S3 Delivery)
+# ============================================================================
+
+@app.route('/api/crm/leads/upload', methods=['POST'])
+@require_api_key
+def crm_upload_leads():
+    """
+    Upload leads for validation (Manual or Auto mode)
+
+    Request body:
+    {
+        "crm_id": "salesforce_acme_corp",
+        "crm_vendor": "salesforce",
+        "validation_mode": "manual" or "auto",
+        "emails": ["email1@example.com", "email2@example.com"],
+        "crm_context": [
+            {"record_id": "001", "email": "email1@example.com", "name": "John Doe"},
+            {"record_id": "002", "email": "email2@example.com", "name": "Jane Smith"}
+        ]
+    }
+
+    Returns:
+        Upload record with upload_id and status
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        # Extract required fields
+        crm_id = data.get('crm_id')
+        crm_vendor = data.get('crm_vendor', 'other')
+        validation_mode = data.get('validation_mode', 'manual')
+        emails = data.get('emails', [])
+        crm_context = data.get('crm_context', [])
+
+        # Validate inputs
+        if not crm_id:
+            return jsonify({"error": "crm_id is required"}), 400
+
+        if not emails:
+            return jsonify({"error": "emails array is required"}), 400
+
+        if validation_mode not in ['manual', 'auto']:
+            return jsonify({"error": "validation_mode must be 'manual' or 'auto'"}), 400
+
+        # Get CRM configuration
+        config_manager = get_crm_config_manager()
+        crm_config = config_manager.get_config(crm_id)
+
+        if not crm_config:
+            return jsonify({
+                "error": f"CRM configuration not found for crm_id: {crm_id}",
+                "hint": "Create CRM configuration first using /api/crm/config endpoint"
+            }), 404
+
+        # Check if auto-validation is allowed
+        if validation_mode == 'auto':
+            premium_features = crm_config.get('premium_features', {})
+            if not premium_features.get('auto_validate', False):
+                return jsonify({
+                    "error": "Auto-validation is not enabled for this CRM",
+                    "hint": "Enable auto_validate premium feature in CRM configuration"
+                }), 403
+
+        # Create upload record
+        lead_manager = get_lead_manager()
+        settings = crm_config.get('settings', {})
+
+        upload = lead_manager.create_upload(
+            crm_id=crm_id,
+            crm_vendor=crm_vendor,
+            emails=emails,
+            crm_context=crm_context,
+            validation_mode=validation_mode,
+            settings=settings
+        )
+
+        # If auto-validation mode, trigger validation immediately
+        if validation_mode == 'auto':
+            # Create validation job
+            job_tracker = get_job_tracker()
+            job_id = f"job_{uuid4().hex[:12]}"
+
+            job_tracker.create_job(
+                job_id=job_id,
+                total_emails=len(emails),
+                session_info={
+                    'upload_id': upload['upload_id'],
+                    'crm_id': crm_id,
+                    'validation_mode': 'auto'
+                }
+            )
+
+            # Update upload with job_id
+            lead_manager.start_validation(upload['upload_id'], job_id)
+
+            # Start background validation
+            include_smtp = settings.get('enable_smtp', True) and SMTP_ENABLED
+
+            def run_auto_validation():
+                """Run validation and S3 delivery in background"""
+                try:
+                    # Run validation
+                    run_smtp_validation_background(
+                        job_id=job_id,
+                        emails_to_validate=emails,
+                        tracker=get_tracker(),
+                        include_smtp=include_smtp
+                    )
+
+                    # Get validation results
+                    job = job_tracker.get_job(job_id)
+                    if not job or not job.get('success'):
+                        lead_manager.fail_validation(
+                            upload['upload_id'],
+                            error="Validation job failed"
+                        )
+                        return
+
+                    # Get tracked results
+                    tracker = get_tracker()
+                    validation_results = []
+                    for email in emails:
+                        result = tracker.get_email(email)
+                        if result:
+                            validation_results.append(result)
+
+                    # Segregate results
+                    include_catchall_in_clean = settings.get('include_catchall_in_clean', False)
+                    include_role_based_in_clean = settings.get('include_role_based_in_clean', False)
+
+                    # Build segregated response
+                    response = build_segregated_crm_response(
+                        validation_results=validation_results,
+                        crm_context=crm_context,
+                        integration_mode='crm',
+                        crm_vendor=crm_vendor,
+                        upload_id=upload['upload_id'],
+                        job_id=job_id,
+                        include_catchall_in_clean=include_catchall_in_clean,
+                        include_role_based_in_clean=include_role_based_in_clean
+                    )
+
+                    # S3 delivery if enabled
+                    s3_delivery_info = None
+                    s3_config = settings.get('s3_delivery', {})
+                    if s3_config.get('enabled', False):
+                        try:
+                            s3_delivery_info = upload_to_s3(
+                                upload_id=upload['upload_id'],
+                                segregated_lists=response['lists'],
+                                s3_config=s3_config
+                            )
+                        except Exception as e:
+                            print(f"[ERROR] S3 delivery failed: {e}")
+
+                    # Complete upload
+                    lead_manager.complete_validation(
+                        upload['upload_id'],
+                        results=response,
+                        s3_delivery=s3_delivery_info
+                    )
+
+                    # Send callback if configured
+                    callback_url = settings.get('callback_url')
+                    if callback_url:
+                        send_crm_callback(callback_url, response, settings)
+
+                except Exception as e:
+                    print(f"[ERROR] Auto-validation failed: {e}")
+                    lead_manager.fail_validation(upload['upload_id'], error=str(e))
+
+            # Start background thread
+            thread = threading.Thread(target=run_auto_validation, daemon=True)
+            thread.start()
+
+            return jsonify({
+                "success": True,
+                "upload_id": upload['upload_id'],
+                "job_id": job_id,
+                "status": "validating",
+                "validation_mode": "auto",
+                "email_count": len(emails),
+                "message": "Auto-validation started. Check status at /api/crm/leads/{upload_id}/status"
+            }), 202
+
+        # Manual mode - return upload record
+        return jsonify({
+            "success": True,
+            "upload_id": upload['upload_id'],
+            "status": "pending_validation",
+            "validation_mode": "manual",
+            "email_count": len(emails),
+            "message": "Upload created. Trigger validation with POST /api/crm/leads/{upload_id}/validate"
+        }), 201
+
+    except Exception as e:
+        print(f"[ERROR] Upload leads failed: {e}")
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/leads/<upload_id>/validate', methods=['POST'])
+@require_api_key
+def crm_validate_leads(upload_id):
+    """
+    Trigger validation for uploaded leads (Manual mode only)
+
+    Returns:
+        Job information and status
+    """
+    try:
+        lead_manager = get_lead_manager()
+        upload = lead_manager.get_upload(upload_id)
+
+        if not upload:
+            return jsonify({"error": f"Upload not found: {upload_id}"}), 404
+
+        # Check if already validating or completed
+        status = upload.get('status')
+        if status == 'validating':
+            return jsonify({
+                "error": "Validation already in progress",
+                "upload_id": upload_id,
+                "job_id": upload.get('job_id'),
+                "status": status
+            }), 409
+
+        if status == 'completed':
+            return jsonify({
+                "error": "Validation already completed",
+                "upload_id": upload_id,
+                "status": status,
+                "hint": "Get results at /api/crm/leads/{upload_id}/results"
+            }), 409
+
+        # Check if manual mode
+        if upload.get('validation_mode') != 'manual':
+            return jsonify({
+                "error": "This upload is in auto-validation mode",
+                "upload_id": upload_id,
+                "validation_mode": upload.get('validation_mode')
+            }), 400
+
+        # Create validation job
+        job_tracker = get_job_tracker()
+        job_id = f"job_{uuid4().hex[:12]}"
+        emails = upload.get('emails', [])
+
+        job_tracker.create_job(
+            job_id=job_id,
+            total_emails=len(emails),
+            session_info={
+                'upload_id': upload_id,
+                'crm_id': upload.get('crm_id'),
+                'validation_mode': 'manual'
+            }
+        )
+
+        # Update upload status
+        lead_manager.start_validation(upload_id, job_id)
+
+        # Get settings
+        settings = upload.get('settings', {})
+        include_smtp = settings.get('enable_smtp', True) and SMTP_ENABLED
+
+        # Start background validation
+        def run_manual_validation():
+            """Run validation and S3 delivery in background"""
+            try:
+                # Run validation
+                run_smtp_validation_background(
+                    job_id=job_id,
+                    emails_to_validate=emails,
+                    tracker=get_tracker(),
+                    include_smtp=include_smtp
+                )
+
+                # Get validation results
+                job = job_tracker.get_job(job_id)
+                if not job or not job.get('success'):
+                    lead_manager.fail_validation(
+                        upload_id,
+                        error="Validation job failed"
+                    )
+                    return
+
+                # Get tracked results
+                tracker = get_tracker()
+                validation_results = []
+                for email in emails:
+                    result = tracker.get_email(email)
+                    if result:
+                        validation_results.append(result)
+
+                # Build segregated response
+                include_catchall_in_clean = settings.get('include_catchall_in_clean', False)
+                include_role_based_in_clean = settings.get('include_role_based_in_clean', False)
+
+                response = build_segregated_crm_response(
+                    validation_results=validation_results,
+                    crm_context=upload.get('crm_context', []),
+                    integration_mode='crm',
+                    crm_vendor=upload.get('crm_vendor', 'other'),
+                    upload_id=upload_id,
+                    job_id=job_id,
+                    include_catchall_in_clean=include_catchall_in_clean,
+                    include_role_based_in_clean=include_role_based_in_clean
+                )
+
+                # S3 delivery if enabled
+                s3_delivery_info = None
+                s3_config = settings.get('s3_delivery', {})
+                if s3_config.get('enabled', False):
+                    try:
+                        s3_delivery_info = upload_to_s3(
+                            upload_id=upload_id,
+                            segregated_lists=response['lists'],
+                            s3_config=s3_config
+                        )
+                    except Exception as e:
+                        print(f"[ERROR] S3 delivery failed: {e}")
+
+                # Complete upload
+                lead_manager.complete_validation(
+                    upload_id,
+                    results=response,
+                    s3_delivery=s3_delivery_info
+                )
+
+                # Send callback if configured
+                callback_url = settings.get('callback_url')
+                if callback_url:
+                    send_crm_callback(callback_url, response, settings)
+
+            except Exception as e:
+                print(f"[ERROR] Manual validation failed: {e}")
+                lead_manager.fail_validation(upload_id, error=str(e))
+
+        # Start background thread
+        thread = threading.Thread(target=run_manual_validation, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "upload_id": upload_id,
+            "job_id": job_id,
+            "status": "validating",
+            "email_count": len(emails),
+            "message": "Validation started. Check status at /api/crm/leads/{upload_id}/status"
+        }), 202
+
+    except Exception as e:
+        print(f"[ERROR] Validate leads failed: {e}")
+        return jsonify({"error": f"Validation failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/leads/<upload_id>/status', methods=['GET'])
+@require_api_key
+def crm_get_upload_status(upload_id):
+    """Get upload and validation status"""
+    try:
+        lead_manager = get_lead_manager()
+        upload = lead_manager.get_upload(upload_id)
+
+        if not upload:
+            return jsonify({"error": f"Upload not found: {upload_id}"}), 404
+
+        # Build status response
+        response = {
+            "upload_id": upload_id,
+            "status": upload.get('status'),
+            "validation_mode": upload.get('validation_mode'),
+            "email_count": upload.get('email_count'),
+            "created_at": upload.get('created_at'),
+            "updated_at": upload.get('updated_at')
+        }
+
+        # Add job progress if validating
+        if upload.get('status') == 'validating' and upload.get('job_id'):
+            job_tracker = get_job_tracker()
+            job = job_tracker.get_job(upload['job_id'])
+            if job:
+                response['job'] = {
+                    'job_id': upload['job_id'],
+                    'progress': job.get('progress', 0),
+                    'status': job.get('status'),
+                    'completed': job.get('completed', 0),
+                    'total': job.get('total', 0)
+                }
+
+        # Add summary if completed
+        if upload.get('status') == 'completed' and upload.get('results'):
+            results = upload['results']
+            response['summary'] = results.get('summary', {})
+            response['validated_at'] = upload.get('validated_at')
+
+            # Add S3 delivery info if available
+            if upload.get('s3_delivery'):
+                response['s3_delivery'] = upload['s3_delivery']
+
+        # Add error if failed
+        if upload.get('status') == 'failed':
+            response['error'] = upload.get('error')
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        print(f"[ERROR] Get upload status failed: {e}")
+        return jsonify({"error": f"Status check failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/leads/<upload_id>/results', methods=['GET'])
+@require_api_key
+def crm_get_upload_results(upload_id):
+    """Get validation results for upload"""
+    try:
+        lead_manager = get_lead_manager()
+        upload = lead_manager.get_upload(upload_id)
+
+        if not upload:
+            return jsonify({"error": f"Upload not found: {upload_id}"}), 404
+
+        if upload.get('status') != 'completed':
+            return jsonify({
+                "error": "Validation not completed yet",
+                "upload_id": upload_id,
+                "status": upload.get('status'),
+                "hint": "Check status at /api/crm/leads/{upload_id}/status"
+            }), 409
+
+        # Return full results
+        results = upload.get('results', {})
+
+        # Add S3 delivery info
+        if upload.get('s3_delivery'):
+            results['s3_delivery'] = upload['s3_delivery']
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        print(f"[ERROR] Get upload results failed: {e}")
+        return jsonify({"error": f"Results retrieval failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/config', methods=['POST'])
+@require_api_key
+def crm_create_config():
+    """
+    Create CRM configuration
+
+    Request body:
+    {
+        "crm_id": "salesforce_acme_corp",
+        "crm_vendor": "salesforce",
+        "api_key": "sk_live_...",
+        "settings": {
+            "auto_validate": false,
+            "enable_smtp": true,
+            "enable_catchall": true,
+            "include_catchall_in_clean": false,
+            "include_role_based_in_clean": false,
+            "callback_url": "https://crm.example.com/webhook",
+            "s3_delivery": {
+                "enabled": true,
+                "bucket_name": "acme-validated-leads",
+                "region": "us-east-1",
+                "access_key_id": "AKIA...",
+                "secret_access_key": "...",
+                "upload_lists": {
+                    "clean": true,
+                    "catchall": false,
+                    "invalid": false
+                }
+            }
+        },
+        "premium_features": {
+            "auto_validate": false,
+            "s3_delivery": true
+        }
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        crm_id = data.get('crm_id')
+        if not crm_id:
+            return jsonify({"error": "crm_id is required"}), 400
+
+        # Create configuration
+        config_manager = get_crm_config_manager()
+
+        # Check if config already exists
+        existing = config_manager.get_config(crm_id)
+        if existing:
+            return jsonify({
+                "error": f"Configuration already exists for crm_id: {crm_id}",
+                "hint": "Use PUT /api/crm/config/{crm_id} to update"
+            }), 409
+
+        # Test S3 connection if S3 delivery is enabled
+        s3_config = data.get('settings', {}).get('s3_delivery', {})
+        if s3_config.get('enabled', False):
+            try:
+                s3_delivery = S3Delivery(s3_config)
+                test_result = s3_delivery.test_connection()
+                if not test_result.get('success'):
+                    return jsonify({
+                        "error": "S3 connection test failed",
+                        "details": test_result.get('error')
+                    }), 400
+            except S3DeliveryError as e:
+                return jsonify({
+                    "error": "Invalid S3 configuration",
+                    "details": str(e)
+                }), 400
+
+        # Create config
+        config = config_manager.create_config(crm_id, data)
+
+        # Remove sensitive data from response
+        if 's3_delivery' in config.get('settings', {}):
+            s3_settings = config['settings']['s3_delivery']
+            if 'secret_access_key' in s3_settings:
+                del s3_settings['secret_access_key']
+            if 'secret_access_key_encrypted' in s3_settings:
+                s3_settings['secret_access_key_encrypted'] = '***ENCRYPTED***'
+
+        return jsonify({
+            "success": True,
+            "config": config,
+            "message": "CRM configuration created successfully"
+        }), 201
+
+    except Exception as e:
+        print(f"[ERROR] Create CRM config failed: {e}")
+        return jsonify({"error": f"Configuration creation failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/config/<crm_id>', methods=['GET'])
+@require_api_key
+def crm_get_config(crm_id):
+    """Get CRM configuration"""
+    try:
+        config_manager = get_crm_config_manager()
+        config = config_manager.get_config(crm_id)
+
+        if not config:
+            return jsonify({"error": f"Configuration not found for crm_id: {crm_id}"}), 404
+
+        # Remove sensitive data from response
+        if 's3_delivery' in config.get('settings', {}):
+            s3_settings = config['settings']['s3_delivery']
+            if 'secret_access_key' in s3_settings:
+                del s3_settings['secret_access_key']
+            if 'secret_access_key_encrypted' in s3_settings:
+                s3_settings['secret_access_key_encrypted'] = '***ENCRYPTED***'
+
+        return jsonify(config), 200
+
+    except Exception as e:
+        print(f"[ERROR] Get CRM config failed: {e}")
+        return jsonify({"error": f"Configuration retrieval failed: {str(e)}"}), 500
+
+
+@app.route('/api/crm/config/<crm_id>', methods=['PUT'])
+@require_api_key
+def crm_update_config(crm_id):
+    """Update CRM configuration"""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        config_manager = get_crm_config_manager()
+
+        # Check if config exists
+        existing = config_manager.get_config(crm_id)
+        if not existing:
+            return jsonify({
+                "error": f"Configuration not found for crm_id: {crm_id}",
+                "hint": "Use POST /api/crm/config to create"
+            }), 404
+
+        # Test S3 connection if S3 settings are being updated
+        if 'settings' in data and 's3_delivery' in data['settings']:
+            s3_config = data['settings']['s3_delivery']
+            if s3_config.get('enabled', False):
+                try:
+                    s3_delivery = S3Delivery(s3_config)
+                    test_result = s3_delivery.test_connection()
+                    if not test_result.get('success'):
+                        return jsonify({
+                            "error": "S3 connection test failed",
+                            "details": test_result.get('error')
+                        }), 400
+                except S3DeliveryError as e:
+                    return jsonify({
+                        "error": "Invalid S3 configuration",
+                        "details": str(e)
+                    }), 400
+
+        # Update config
+        config = config_manager.update_config(crm_id, data)
+
+        # Remove sensitive data from response
+        if 's3_delivery' in config.get('settings', {}):
+            s3_settings = config['settings']['s3_delivery']
+            if 'secret_access_key' in s3_settings:
+                del s3_settings['secret_access_key']
+            if 'secret_access_key_encrypted' in s3_settings:
+                s3_settings['secret_access_key_encrypted'] = '***ENCRYPTED***'
+
+        return jsonify({
+            "success": True,
+            "config": config,
+            "message": "CRM configuration updated successfully"
+        }), 200
+
+    except Exception as e:
+        print(f"[ERROR] Update CRM config failed: {e}")
+        return jsonify({"error": f"Configuration update failed: {str(e)}"}), 500
 
 
 @app.route('/tracker/stats', methods=['GET'])
