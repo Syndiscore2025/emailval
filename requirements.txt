@@ -14,6 +14,10 @@ PyPDF2==3.0.1    # PDF files
 # Production Server
 gunicorn==21.2.0
 
+# AWS S3 Integration
+boto3==1.34.34        # AWS SDK for S3 delivery
+cryptography==42.0.0  # Encryption for AWS credentials
+
 # Optional: For enhanced functionality
 python-dotenv==1.0.0  # Environment variable management
 flasgger==0.9.7.1     # Interactive API documentation (Swagger/OpenAPI)

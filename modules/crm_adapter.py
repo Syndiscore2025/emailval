@@ -5,6 +5,63 @@ Provides standardized request/response formats for CRM integrations
 (Salesforce, HubSpot, custom CRM, etc.)
 """
 from typing import Dict, Any, List, Optional
+from datetime import datetime
+
+
+def segregate_validation_results(
+    validation_results: List[Dict[str, Any]],
+    include_catchall_in_clean: bool = False,
+    include_role_based_in_clean: bool = False
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Segregate validation results into separate lists
+
+    Args:
+        validation_results: List of validation results
+        include_catchall_in_clean: Whether to include catch-all emails in clean list
+        include_role_based_in_clean: Whether to include role-based emails in clean list
+
+    Returns:
+        Dict with segregated lists: clean, catchall, invalid, disposable, role_based
+    """
+    segregated = {
+        'clean': [],
+        'catchall': [],
+        'invalid': [],
+        'disposable': [],
+        'role_based': []
+    }
+
+    for result in validation_results:
+        email = result.get('email')
+        is_valid = result.get('valid', False)
+        checks = result.get('checks', {})
+
+        # Extract flags
+        is_catchall = checks.get('catchall', {}).get('is_catchall', False)
+        is_disposable = checks.get('type', {}).get('is_disposable', False)
+        is_role_based = checks.get('type', {}).get('is_role_based', False)
+
+        # Categorize email
+        if not is_valid:
+            segregated['invalid'].append(result)
+        elif is_disposable:
+            segregated['disposable'].append(result)
+        elif is_catchall:
+            segregated['catchall'].append(result)
+            # Optionally include in clean list
+            if include_catchall_in_clean:
+                segregated['clean'].append(result)
+        elif is_role_based:
+            segregated['role_based'].append(result)
+            # Optionally include in clean list
+            if include_role_based_in_clean:
+                segregated['clean'].append(result)
+        else:
+            # Valid, non-catchall, non-disposable, non-role-based
+            segregated['clean'].append(result)
+
+    return segregated
 
 
 def parse_crm_request(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -161,4 +218,114 @@ def validate_crm_vendor(vendor: str) -> str:
     }
 
     return known_vendors.get(vendor_lower, 'other')
+
+
+def build_segregated_crm_response(
+    validation_results: List[Dict[str, Any]],
+    crm_context: List[Dict[str, Any]],
+    integration_mode: str = 'crm',
+    crm_vendor: str = 'other',
+    upload_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+    s3_delivery: Optional[Dict[str, Any]] = None,
+    include_catchall_in_clean: bool = False,
+    include_role_based_in_clean: bool = False,
+    event: str = 'validation.completed'
+) -> Dict[str, Any]:
+    """
+    Build CRM response with segregated lists
+
+    Args:
+        validation_results: List of validation results
+        crm_context: Original CRM context records
+        integration_mode: "crm" or "single_use"
+        crm_vendor: CRM vendor identifier
+        upload_id: Upload identifier
+        job_id: Job identifier
+        s3_delivery: S3 delivery information
+        include_catchall_in_clean: Include catch-all in clean list
+        include_role_based_in_clean: Include role-based in clean list
+        event: Event type
+
+    Returns:
+        Segregated CRM response
+    """
+    # Build email -> crm_record mapping
+    email_to_record = {}
+    if isinstance(crm_context, list):
+        for record in crm_context:
+            if isinstance(record, dict) and 'email' in record:
+                email_to_record[record['email'].strip().lower()] = record
+
+    # Enrich validation results with CRM metadata
+    enriched_results = []
+    for result in validation_results:
+        email = result.get('email', '').strip().lower()
+        crm_record = email_to_record.get(email, {})
+
+        # Extract catch-all status
+        catchall_checks = result.get('checks', {}).get('catchall', {})
+        is_catchall = catchall_checks.get('is_catchall', False)
+        catchall_confidence = catchall_checks.get('confidence', 'low')
+
+        enriched = {
+            'email': result.get('email'),
+            'status': 'valid' if result.get('valid') else 'invalid',
+            'checks': result.get('checks', {}),
+            'errors': result.get('errors', []),
+            'is_catchall': is_catchall,
+            'catchall_confidence': catchall_confidence,
+        }
+
+        # Add warnings if present
+        if result.get('warnings'):
+            enriched['warnings'] = result.get('warnings', [])
+
+        # Add CRM-specific identifiers
+        if crm_record:
+            enriched['crm_record_id'] = crm_record.get('record_id') or crm_record.get('id')
+            enriched['crm_metadata'] = {
+                k: v for k, v in crm_record.items()
+                if k not in ['email', 'record_id', 'id']
+            }
+
+        enriched_results.append(enriched)
+
+    # Segregate results
+    segregated = segregate_validation_results(
+        enriched_results,
+        include_catchall_in_clean,
+        include_role_based_in_clean
+    )
+
+    # Build summary
+    summary = {
+        'total': len(enriched_results),
+        'clean': len(segregated['clean']),
+        'catchall': len(segregated['catchall']),
+        'invalid': len(segregated['invalid']),
+        'disposable': len(segregated['disposable']),
+        'role_based': len(segregated['role_based']),
+        'valid': sum(1 for r in enriched_results if r['status'] == 'valid'),
+    }
+
+    response = {
+        'event': event,
+        'integration_mode': integration_mode,
+        'crm_vendor': crm_vendor,
+        'summary': summary,
+        'lists': segregated,
+        'timestamp': datetime.now().isoformat()
+    }
+
+    if upload_id:
+        response['upload_id'] = upload_id
+
+    if job_id:
+        response['job_id'] = job_id
+
+    if s3_delivery:
+        response['s3_delivery'] = s3_delivery
+
+    return response
 
