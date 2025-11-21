@@ -60,3 +60,10 @@ uploads/
 .coverage
 htmlcov/
 
+# CRM Integration Data
+data/crm_configs.json
+data/crm_uploads.json
+
+# Backup files
+*.backup
+*_backup_*.json

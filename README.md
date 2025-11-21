@@ -7,15 +7,16 @@ A production-grade, modular SaaS web application for validating email addresses 
 ### Core Validation
 - ✅ **Single Email Validation** - Validate individual email addresses via web UI or API
 - 📁 **Bulk File Upload** - Support for CSV, XLS, XLSX, and PDF files
-- 🔌 **CRM Integration** - Webhook endpoint for seamless CRM integration
+- 🔌 **CRM Integration** - Full two-way integration with manual/auto validation modes
 - 🎯 **Multi-Layer Validation**:
   - Syntax validation (RFC 5322 compliant)
   - Domain validation (MX/A record lookup)
   - Type detection (disposable/role-based emails)
+  - Catch-all domain detection with confidence scoring
   - Optional SMTP verification
   - **Deliverability Scoring** (0-100 with rating)
 
-### Advanced Features (Phase 4-7)
+### Advanced Features
 - 🎯 **Dynamic Column Handling**:
   - Intelligent @ symbol detection with confidence scoring
   - Fuzzy column header matching (handles typos and variations)
@@ -26,6 +27,7 @@ A production-grade, modular SaaS web application for validating email addresses 
   - Validation trends and charts
   - Top domains analysis
   - Domain reputation scoring
+  - Catch-all detection statistics
 - 📄 **Export & Reporting**:
   - CSV export with detailed validation results
   - Excel export with formatting and auto-column sizing
@@ -34,6 +36,32 @@ A production-grade, modular SaaS web application for validating email addresses 
 - 📧 **Email Deduplication** - Persistent tracking across sessions
 - 🎨 **Modern UI** - VSCode-inspired dark theme with Tailwind CSS
 - 🚀 **Production Ready** - Render-deployable with health checks
+
+### CRM Integration Features
+- 🔄 **Two Validation Modes**:
+  - **Manual Mode**: Upload → User clicks validate → Get results
+  - **Auto Mode**: Upload → Auto-validates → Get results (Premium)
+- 📋 **Email Segregation** - 5 separate lists:
+  - Clean (valid, ready to use)
+  - Catch-all (valid but unverifiable)
+  - Invalid (failed validation)
+  - Disposable (temporary email services)
+  - Role-based (info@, admin@, etc.)
+- ☁️ **S3 Delivery**:
+  - Upload validated lists to client's AWS S3 bucket
+  - SSE-S3 encryption (AES256)
+  - Presigned URLs with 24-hour expiry
+  - Date-partitioned file structure
+- 🔐 **Secure Configuration**:
+  - Encrypted AWS credentials storage (Fernet encryption)
+  - API key authentication
+  - Configurable premium features
+- 🔌 **RESTful API**:
+  - Lead upload endpoint
+  - Manual validation trigger
+  - Real-time status polling
+  - Results retrieval with segregated lists
+  - Backward-compatible webhook endpoint
 
 ## Project Structure
 
@@ -48,11 +76,17 @@ email_validator/
 │   ├── domain_check.py    # DNS MX/A record validation
 │   ├── type_check.py      # Disposable/role-based detection
 │   ├── smtp_check.py      # SMTP mailbox verification
-│   ├── file_parser.py     # CSV/XLS/PDF parsing (Phase 4: Dynamic column handling)
-│   ├── reporting.py       # CSV/Excel/PDF report generation (Phase 6)
+│   ├── catchall_check.py  # Catch-all domain detection
+│   ├── file_parser.py     # CSV/XLS/PDF parsing with dynamic column handling
+│   ├── reporting.py       # CSV/Excel/PDF report generation
 │   ├── email_tracker.py   # Persistent email deduplication
 │   ├── api_auth.py        # API key authentication
-│   ├── crm_adapter.py     # CRM webhook integration
+│   ├── admin_auth.py      # Admin authentication
+│   ├── crm_adapter.py     # CRM integration adapter with email segregation
+│   ├── crm_config.py      # CRM configuration management with encryption
+│   ├── lead_manager.py    # Lead upload tracking system
+│   ├── s3_delivery.py     # AWS S3 delivery for validated lists
+│   ├── job_tracker.py     # Background job tracking
 │   └── utils.py           # Utility functions + deliverability scoring
 ├── templates/
 │   ├── index.html         # Main web interface
@@ -65,16 +99,14 @@ email_validator/
 │       └── admin.js       # Admin dashboard JavaScript
 ├── data/
 │   ├── email_history.json # Persistent email tracking database
-│   └── api_keys.json      # API key storage
+│   ├── validation_jobs.json # Background job tracking
+│   ├── api_keys.json      # API key storage
+│   ├── crm_configs.json   # CRM configurations (encrypted credentials)
+│   └── crm_uploads.json   # CRM lead upload tracking
 └── tests/
-    ├── test_syntax.py
-    ├── test_domain.py
-    ├── test_type.py
-    ├── test_file_parser.py
-    ├── test_complete.py
-    ├── test_phase4.py     # Phase 4 tests
-    ├── test_analytics.py  # Phase 6 tests
-    └── test_e2e.py        # End-to-end integration tests (Phase 7)
+    ├── test_crm_modules_direct.py  # CRM module tests
+    ├── test_crm_endpoints.py       # CRM API endpoint tests
+    └── test_complete.py            # Complete validation tests
 ```
 
 ## Installation
