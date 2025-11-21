@@ -22,3 +22,7 @@ cryptography==42.0.0  # Encryption for AWS credentials
 python-dotenv==1.0.0  # Environment variable management
 flasgger==0.9.7.1     # Interactive API documentation (Swagger/OpenAPI)
 
+# Logging and Monitoring
+python-json-logger==2.0.7  # Structured JSON logging
+sentry-sdk==1.40.0          # Error tracking and monitoring
+

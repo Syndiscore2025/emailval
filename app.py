@@ -58,8 +58,17 @@ from modules.admin_auth import (
     change_admin_password,
 )
 from modules.obvious_invalid import is_obviously_invalid
+from modules.logger import init_logger, get_logger, PerformanceTimer
+from modules.backup_manager import get_backup_manager
 
 app = Flask(__name__)
+
+# Initialize structured logging
+logger = init_logger(app)
+logger.info("Email Validator application starting", extra={
+    'smtp_enabled': os.getenv("SMTP_ENABLED", "false").lower() == "true",
+    'environment': os.getenv("ENVIRONMENT", "production")
+})
 
 # Global feature flag: controls whether SMTP verification is available anywhere in the app
 SMTP_ENABLED = os.getenv("SMTP_ENABLED", "false").lower() == "true"
@@ -97,10 +106,11 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
     start_time = time.time()
 
     try:
-        print(f"[BACKGROUND] ========================================")
-        print(f"[BACKGROUND] Thread started for job {job_id}")
-        print(f"[BACKGROUND] Total emails to validate: {total_emails}")
-        print(f"[BACKGROUND] ========================================")
+        logger.info("Background validation started", extra={
+            'job_id': job_id,
+            'email_count': total_emails,
+            'include_smtp': effective_include_smtp
+        })
 
         job = job_tracker.get_job(job_id) or {}
         job_session_info = job.get("session_info", {}) if isinstance(job, dict) else {}
@@ -108,7 +118,7 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
         # --------------------
         # Phase 1: Fast checks
         # --------------------
-        print(f"[BACKGROUND] Step 1: Running syntax/domain/type checks...")
+        logger.info("Phase 1: Running syntax/domain/type checks", extra={'job_id': job_id})
 
 
         # For smoother real-time updates on large files, update progress more frequently
@@ -168,22 +178,19 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
                     personal,
                 )
 
-                print(
-                    f"[BACKGROUND] Pre-check progress: "
-                    f"{completed_precheck}/{total_emails} "
-                    f"({progress_fraction * 100:.1f}% of total)",
-                )
+                logger.debug("Pre-check progress", extra={
+                    'job_id': job_id,
+                    'completed': completed_precheck,
+                    'total': total_emails,
+                    'progress_percent': round(progress_fraction * 100, 1)
+                })
 
                 last_update_time = now
 
-        print(
-            f"[BACKGROUND] Processed {total_emails}/{total_emails} "
-            f"syntax/domain/type checks..."
-        )
-
-        print(
-            f"[BACKGROUND] Step 1 complete: {len(validation_results)} emails pre-validated"
-        )
+        logger.info("Phase 1 complete: Pre-checks finished", extra={
+            'job_id': job_id,
+            'emails_validated': len(validation_results)
+        })
 
         # If SMTP is disabled for this job (or globally), we can finish after pre-checks.
         if not effective_include_smtp:
@@ -229,7 +236,11 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             tracker.track_emails(emails_to_validate, validation_results, session_info)
 
             job_tracker.complete_job(job_id, success=True)
-            print(f"[BACKGROUND] Pre-check-only validation complete for job {job_id}")
+            logger.info("Pre-check-only validation complete", extra={
+                'job_id': job_id,
+                'duration_ms': duration_ms,
+                'total_emails': total_emails
+            })
             return
 
         # Build a mapping of email -> domain info from phase 1 so the SMTP
@@ -280,11 +291,14 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             valid_precheck = sum(1 for r in validation_results if r.get("valid", False))
             invalid_precheck = total_emails - valid_precheck
 
-            print(
-                f"[BACKGROUND] SMTP Progress: {completed_smtp}/{total_smtp} "
-                f"({total_progress_fraction * 100:.1f}% of total) - "
-                f"Pre-check valid: {valid_precheck}, Pre-check invalid: {invalid_precheck}"
-            )
+            logger.debug("SMTP validation progress", extra={
+                'job_id': job_id,
+                'completed_smtp': completed_smtp,
+                'total_smtp': total_smtp,
+                'progress_percent': round(total_progress_fraction * 100, 1),
+                'precheck_valid': valid_precheck,
+                'precheck_invalid': invalid_precheck
+            })
 
         max_smtp_workers_env = os.getenv("SMTP_MAX_WORKERS")
         try:
@@ -298,10 +312,11 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
         if max_smtp_workers < 1:
             max_smtp_workers = 1
 
-        print(
-            f"[BACKGROUND] Running parallel SMTP checks with {max_smtp_workers} "
-            f"concurrent connections..."
-        )
+        logger.info("Phase 2: Starting SMTP validation", extra={
+            'job_id': job_id,
+            'max_workers': max_smtp_workers,
+            'email_count': len(emails_to_validate)
+        })
         smtp_results = validate_smtp_batch_with_progress(
             emails_to_validate,
             max_workers=max_smtp_workers,
@@ -310,16 +325,22 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             progress_callback=progress_callback,
             email_domain_map=email_domain_map,
         )
-        print(f"[BACKGROUND] SMTP batch complete, got {len(smtp_results)} results")
+        logger.info("SMTP validation complete", extra={
+            'job_id': job_id,
+            'results_count': len(smtp_results)
+        })
 
         # Check for catch-all domains (done once per domain, not per email)
-        print(f"[BACKGROUND] Checking for catch-all domains...")
+        logger.info("Checking for catch-all domains", extra={'job_id': job_id})
         catchall_results = check_catchall_for_domains(
             email_domain_map,
             timeout=3,
             sender=None
         )
-        print(f"[BACKGROUND] Catch-all check complete for {len(catchall_results)} domains")
+        logger.info("Catch-all check complete", extra={
+            'job_id': job_id,
+            'domains_checked': len(catchall_results)
+        })
 
         # Merge SMTP results into validation results
         for i, result in enumerate(validation_results):
@@ -389,8 +410,6 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
             final_catchall,
         )
 
-        print(f"[BACKGROUND] Parallel SMTP validation complete for job {job_id}")
-
         # Save results to database
         duration_ms = int((time.time() - start_time) * 1000)
         session_info = {
@@ -405,12 +424,19 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
 
         # Mark job as complete
         job_tracker.complete_job(job_id, success=True)
-        print(f"[BACKGROUND] Job {job_id} completed successfully")
+        logger.info("Background validation completed successfully", extra={
+            'job_id': job_id,
+            'duration_ms': duration_ms,
+            'total_emails': total_emails,
+            'valid_count': final_valid,
+            'invalid_count': final_invalid
+        })
 
     except Exception as smtp_error:
-        print(f"[BACKGROUND] SMTP validation error for job {job_id}: {smtp_error}")
-        import traceback
-        print(traceback.format_exc())
+        logger.error("Background validation failed", extra={
+            'job_id': job_id,
+            'error': str(smtp_error)
+        }, exc_info=True)
         job_tracker.complete_job(job_id, success=False, error=str(smtp_error))
 
 
@@ -1024,6 +1050,76 @@ def clear_database():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/admin/api/backup/create', methods=['POST'])
+@require_admin_api
+def create_backup():
+    """Create a manual backup of all database files"""
+    try:
+        data = request.get_json() or {}
+        upload_to_s3 = data.get('upload_to_s3', None)
+
+        backup_manager = get_backup_manager()
+        result = backup_manager.create_backup(upload_to_s3=upload_to_s3)
+
+        logger.info("Manual backup created", extra={
+            'success': result.get('success'),
+            'backup_name': result.get('backup_name'),
+            'files_backed_up': result.get('files_backed_up')
+        })
+
+        return jsonify(result)
+    except Exception as e:
+        logger.error("Backup creation failed", extra={'error': str(e)}, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/backup/list', methods=['GET'])
+@require_admin_api
+def list_backups():
+    """List all available backups"""
+    try:
+        limit = int(request.args.get('limit', 50))
+        backup_manager = get_backup_manager()
+        backups = backup_manager.list_backups(limit=limit)
+
+        return jsonify({"success": True, "backups": backups, "count": len(backups)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/backup/config', methods=['GET'])
+@require_admin_api
+def get_backup_config():
+    """Get backup configuration"""
+    try:
+        backup_manager = get_backup_manager()
+        config = backup_manager.get_config()
+
+        return jsonify({"success": True, "config": config})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/admin/api/backup/config', methods=['POST'])
+@require_admin_api
+def update_backup_config():
+    """Update backup configuration"""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        backup_manager = get_backup_manager()
+        backup_manager.update_config(data)
+
+        logger.info("Backup configuration updated", extra={'updates': list(data.keys())})
+
+        return jsonify({"success": True, "config": backup_manager.get_config()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/admin/analytics')
 @require_admin_login
 def admin_analytics():
@@ -1358,7 +1454,10 @@ def upload_file():
     }
     """
     try:
-        print(f"[UPLOAD] Starting file upload processing...")
+        logger.info("File upload request received", extra={
+            'endpoint': '/upload',
+            'method': 'POST'
+        })
 
         # Get all uploaded files
         files = request.files.getlist('files[]')
