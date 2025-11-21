@@ -1646,6 +1646,19 @@ def webhook_validate():
                 type: boolean
                 default: false
                 description: Include SMTP verification
+              response_format:
+                type: string
+                enum: [standard, segregated]
+                default: standard
+                description: Response format - 'segregated' returns separate lists (clean, catchall, invalid, etc.)
+              include_catchall_in_clean:
+                type: boolean
+                default: false
+                description: Include catch-all emails in clean list (only for segregated format)
+              include_role_based_in_clean:
+                type: boolean
+                default: false
+                description: Include role-based emails in clean list (only for segregated format)
               callback_url:
                 type: string
                 description: URL to receive async validation results
@@ -1950,14 +1963,34 @@ def webhook_validate():
         job_id = str(uuid4()) if callback_url else None
         event_type = get_crm_event_type(success=True, has_errors=False)
 
-        response = build_crm_response(
-            validation_results=results,
-            crm_context=crm_context,
-            integration_mode=integration_mode,
-            crm_vendor=crm_vendor,
-            job_id=job_id,
-            event=event_type
-        )
+        # Check response format preference
+        response_format = data.get('response_format', 'standard')
+
+        if response_format == 'segregated':
+            # Use new segregated response format
+            include_catchall_in_clean = data.get('include_catchall_in_clean', False)
+            include_role_based_in_clean = data.get('include_role_based_in_clean', False)
+
+            response = build_segregated_crm_response(
+                validation_results=results,
+                crm_context=crm_context,
+                integration_mode=integration_mode,
+                crm_vendor=crm_vendor,
+                job_id=job_id,
+                include_catchall_in_clean=include_catchall_in_clean,
+                include_role_based_in_clean=include_role_based_in_clean,
+                event=event_type
+            )
+        else:
+            # Use standard response format (backward compatible)
+            response = build_crm_response(
+                validation_results=results,
+                crm_context=crm_context,
+                integration_mode=integration_mode,
+                crm_vendor=crm_vendor,
+                job_id=job_id,
+                event=event_type
+            )
 
         if file_results:
             response["files"] = file_results
