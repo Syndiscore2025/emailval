@@ -60,8 +60,12 @@ from modules.admin_auth import (
 from modules.obvious_invalid import is_obviously_invalid
 from modules.logger import init_logger, get_logger, PerformanceTimer
 from modules.backup_manager import get_backup_manager
+from modules.n8n_integration import n8n_bp
 
 app = Flask(__name__)
+
+# Register n8n integration blueprint
+app.register_blueprint(n8n_bp)
 
 # Initialize structured logging
 logger = init_logger(app)
@@ -2838,11 +2842,19 @@ def get_tracker_stats():
     Get email tracker statistics
 
     Returns:
-        JSON with tracking statistics
+        JSON with tracking statistics including catch-all and email type breakdowns
     """
     try:
         tracker = get_tracker()
         stats = tracker.get_stats()
+
+        # Add detailed email type statistics
+        emails_data = tracker.data.get("emails", {})
+        stats["catchall_count"] = sum(1 for e in emails_data.values() if e.get('is_catchall') is True)
+        stats["disposable_count"] = sum(1 for e in emails_data.values() if e.get('is_disposable') is True)
+        stats["role_based_count"] = sum(1 for e in emails_data.values() if e.get('is_role_based') is True)
+        stats["valid_count"] = sum(1 for e in emails_data.values() if e.get('valid') is True)
+        stats["invalid_count"] = sum(1 for e in emails_data.values() if e.get('valid') is False)
 
         return jsonify({
             "success": True,
@@ -3189,12 +3201,23 @@ def get_analytics_data():
     emails_data = tracker.data.get("emails", {})
     total_emails = len(emails_data)
 
+    # Calculate detailed email statistics
+    valid_count = sum(1 for e in emails_data.values() if e.get('valid') is True)
+    invalid_count = sum(1 for e in emails_data.values() if e.get('valid') is False)
+    catchall_count = sum(1 for e in emails_data.values() if e.get('is_catchall') is True)
+    disposable_count = sum(1 for e in emails_data.values() if e.get('is_disposable') is True)
+    role_based_count = sum(1 for e in emails_data.values() if e.get('is_role_based') is True)
+
     # Calculate KPIs from real data
     kpis = {
         "total_emails": total_emails,
-        "valid_emails": total_emails,  # Placeholder - would need validation status
-        "invalid_emails": 0,  # Placeholder
-        "valid_percentage": 100.0 if total_emails > 0 else 0,
+        "valid_emails": valid_count,
+        "invalid_emails": invalid_count,
+        "catchall_emails": catchall_count,
+        "disposable_emails": disposable_count,
+        "role_based_emails": role_based_count,
+        "valid_percentage": (valid_count / total_emails * 100) if total_emails > 0 else 0,
+        "catchall_percentage": (catchall_count / total_emails * 100) if total_emails > 0 else 0,
         "total_validations": stats.get("total_upload_sessions", 0),
         "duplicates_prevented": stats.get("total_duplicates_prevented", 0)
     }
@@ -3223,8 +3246,9 @@ def get_analytics_data():
     email_types = {
         "personal": sum(1 for e in emails_data.values() if e.get('type') == 'personal'),
         "business": sum(1 for e in emails_data.values() if e.get('type') == 'business'),
-        "role": sum(1 for e in emails_data.values() if e.get('type') == 'role'),
-        "disposable": sum(1 for e in emails_data.values() if e.get('type') == 'disposable')
+        "role": role_based_count,
+        "disposable": disposable_count,
+        "catchall": catchall_count
     }
 
     # Add additional KPIs for analytics page

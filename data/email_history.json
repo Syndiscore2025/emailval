@@ -2486,17 +2486,17 @@
     },
     "test@gmail.com": {
       "first_seen": "2025-11-20T15:17:03.210994",
-      "last_seen": "2025-11-20T15:17:03.210994",
-      "send_count": 1,
-      "validation_count": 1,
+      "last_seen": "2025-12-04T11:52:17.471307",
+      "send_count": 2,
+      "validation_count": 2,
       "valid": true,
-      "type": "personal",
+      "type": "unknown",
       "smtp_verified": false,
       "is_disposable": false,
       "is_role_based": false,
       "is_catchall": false,
       "catchall_confidence": "low",
-      "last_validated": "2025-11-20T15:17:03.210994",
+      "last_validated": "2025-12-04T11:52:17.471307",
       "status": "valid"
     },
     "info@yahoo.com": {
@@ -2512,6 +2512,36 @@
       "is_catchall": false,
       "catchall_confidence": "low",
       "last_validated": "2025-11-20T15:17:03.210994",
+      "status": "valid"
+    },
+    "invalid@fakexyz123.com": {
+      "first_seen": "2025-12-04T11:52:17.471307",
+      "last_seen": "2025-12-04T11:52:17.471307",
+      "send_count": 1,
+      "validation_count": 1,
+      "valid": false,
+      "type": "unknown",
+      "smtp_verified": false,
+      "is_disposable": false,
+      "is_role_based": false,
+      "is_catchall": false,
+      "catchall_confidence": "low",
+      "last_validated": "2025-12-04T11:52:17.471307",
+      "status": "invalid"
+    },
+    "info@microsoft.com": {
+      "first_seen": "2025-12-04T11:52:17.471307",
+      "last_seen": "2025-12-04T11:52:17.471307",
+      "send_count": 1,
+      "validation_count": 1,
+      "valid": true,
+      "type": "unknown",
+      "smtp_verified": false,
+      "is_disposable": false,
+      "is_role_based": false,
+      "is_catchall": false,
+      "catchall_confidence": "low",
+      "last_validated": "2025-12-04T11:52:17.471307",
       "status": "valid"
     }
   },
@@ -2532,11 +2562,19 @@
       "integration_mode": "crm",
       "crm_vendor": "custom",
       "duration_ms": 46
+    },
+    {
+      "timestamp": "2025-12-04T11:52:17.471307",
+      "emails_count": 3,
+      "new_emails": 2,
+      "duplicates": 1,
+      "session_type": "n8n",
+      "duration_ms": 0
     }
   ],
   "stats": {
-    "total_emails_tracked": 209,
-    "total_uploads": 2,
-    "total_duplicates_prevented": 0
+    "total_emails_tracked": 211,
+    "total_uploads": 3,
+    "total_duplicates_prevented": 1
   }
 }

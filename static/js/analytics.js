@@ -32,6 +32,9 @@ async function loadAnalytics() {
 function updateKPIs(kpis) {
     document.getElementById('total-validations').textContent = kpis.total_validations || 0;
     document.getElementById('success-rate').textContent = (kpis.valid_percentage || 0).toFixed(1) + '%';
+    document.getElementById('catchall-count').textContent =
+        `${(kpis.catchall_emails || 0).toLocaleString()} (${(kpis.catchall_percentage || 0).toFixed(1)}%)`;
+    document.getElementById('disposable-count').textContent = (kpis.disposable_emails || 0).toLocaleString();
     document.getElementById('avg-response-time').textContent = (kpis.avg_response_time || 0) + 'ms';
     document.getElementById('api-calls').textContent = kpis.api_requests || 0;
 }
@@ -73,15 +76,16 @@ function updateCharts(data) {
     typesChart = new Chart(typesCtx, {
         type: 'doughnut',
         data: {
-            labels: ['Personal', 'Business', 'Role-based', 'Disposable'],
+            labels: ['Personal', 'Business', 'Role-based', 'Disposable', 'Catch-All'],
             datasets: [{
                 data: [
                     data.email_types.personal || 0,
                     data.email_types.business || 0,
                     data.email_types.role || 0,
-                    data.email_types.disposable || 0
+                    data.email_types.disposable || 0,
+                    data.email_types.catchall || 0
                 ],
-                backgroundColor: ['#3498db', '#9b59b6', '#f39c12', '#e74c3c']
+                backgroundColor: ['#3498db', '#9b59b6', '#f39c12', '#e74c3c', '#f1c40f']
             }]
         },
         options: {

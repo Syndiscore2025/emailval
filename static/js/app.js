@@ -848,6 +848,18 @@ async function loadTrackerStats() {
                             <div class="stat-label">Total Unique Emails</div>
                         </div>
                         <div class="stat-card">
+                            <div class="stat-value valid">${stats.valid_count || 0}</div>
+                            <div class="stat-label">Valid Emails</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" style="color: #856404;">${stats.catchall_count || 0}</div>
+                            <div class="stat-label">⚠️ Catch-All Domains</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value warning">${stats.disposable_count || 0}</div>
+                            <div class="stat-label">Disposable Emails</div>
+                        </div>
+                        <div class="stat-card">
                             <div class="stat-value">${stats.total_upload_sessions || 0}</div>
                             <div class="stat-label">Upload Sessions</div>
                         </div>

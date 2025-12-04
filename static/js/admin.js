@@ -8,12 +8,15 @@ async function loadKPIs() {
     try {
         const response = await fetch('/admin/analytics/data');
         const data = await response.json();
-        
+
         // Update KPIs with REAL data (no hardcoding)
         document.getElementById('kpi-total-emails').textContent = data.kpis.total_emails.toLocaleString();
         document.getElementById('kpi-valid-percent').textContent = data.kpis.valid_percentage.toFixed(1) + '%';
+        document.getElementById('kpi-catchall-count').textContent =
+            `${data.kpis.catchall_emails.toLocaleString()} (${data.kpis.catchall_percentage.toFixed(1)}%)`;
         document.getElementById('kpi-api-requests').textContent = data.kpis.total_validations.toLocaleString();
         document.getElementById('kpi-active-keys').textContent = data.active_keys;
+        document.getElementById('kpi-disposable-count').textContent = data.kpis.disposable_emails.toLocaleString();
     } catch (error) {
         console.error('Error loading KPIs:', error);
         document.querySelectorAll('.kpi-value').forEach(el => {
