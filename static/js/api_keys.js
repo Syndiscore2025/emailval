@@ -25,13 +25,13 @@ async function loadApiKeys() {
         tbody.innerHTML = data.keys.map(key => `
             <tr>
                 <td><strong>${escapeHtml(key.name)}</strong></td>
-                <td><code>${maskApiKey(key.key)}</code></td>
+                <td><code>${maskApiKey(key.key_id)}</code></td>
                 <td>${formatDate(key.created_at)}</td>
                 <td>${key.last_used ? formatDate(key.last_used) : 'Never'}</td>
-                <td>${key.request_count || 0}</td>
+                <td>${key.usage_total || 0}</td>
                 <td><span class="status-badge ${key.active ? 'active' : 'inactive'}">${key.active ? 'Active' : 'Revoked'}</span></td>
                 <td>
-                    ${key.active ? `<button class="btn-danger-sm" onclick="revokeKey('${key.key}')">Revoke</button>` : '<span class="text-muted">Revoked</span>'}
+                    ${key.active ? `<button class="btn-danger-sm" onclick="revokeKey('${key.key_id}')">Revoke</button>` : '<span class="text-muted">Revoked</span>'}
                 </td>
             </tr>
         `).join('');
@@ -147,6 +147,7 @@ function copyApiKey() {
  * Mask API key for display
  */
 function maskApiKey(key) {
+    if (!key) return 'N/A';
     if (key.length <= 8) return key;
     return key.substring(0, 8) + '...' + key.substring(key.length - 4);
 }
