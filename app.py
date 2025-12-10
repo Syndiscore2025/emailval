@@ -466,6 +466,218 @@ CORS(app,
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+
+# ============================================================================
+# GLOBAL ERROR HANDLERS
+# ============================================================================
+
+def build_error_response(error_code: str, message: str, status_code: int, details: dict = None):
+    """Build standardized error response"""
+    response = {
+        "error": {
+            "code": error_code,
+            "message": message,
+            "status": status_code
+        },
+        "success": False
+    }
+    if details:
+        response["error"]["details"] = details
+    return response
+
+
+@app.errorhandler(400)
+def bad_request_error(error):
+    """Handle 400 Bad Request errors"""
+    logger.warning("Bad request", extra={
+        'status_code': 400,
+        'error': str(error),
+        'path': request.path
+    })
+    return jsonify(build_error_response(
+        "BAD_REQUEST",
+        str(error.description) if hasattr(error, 'description') else "Bad request",
+        400
+    )), 400
+
+
+@app.errorhandler(401)
+def unauthorized_error(error):
+    """Handle 401 Unauthorized errors"""
+    logger.warning("Unauthorized access attempt", extra={
+        'status_code': 401,
+        'path': request.path,
+        'remote_addr': request.remote_addr
+    })
+    return jsonify(build_error_response(
+        "UNAUTHORIZED",
+        "Authentication required",
+        401
+    )), 401
+
+
+@app.errorhandler(403)
+def forbidden_error(error):
+    """Handle 403 Forbidden errors"""
+    logger.warning("Forbidden access attempt", extra={
+        'status_code': 403,
+        'path': request.path,
+        'remote_addr': request.remote_addr
+    })
+    return jsonify(build_error_response(
+        "FORBIDDEN",
+        "Access denied",
+        403
+    )), 403
+
+
+@app.errorhandler(404)
+def not_found_error(error):
+    """Handle 404 Not Found errors"""
+    # Don't log favicon requests as errors
+    if request.path != '/favicon.ico':
+        logger.info("Resource not found", extra={
+            'status_code': 404,
+            'path': request.path
+        })
+    return jsonify(build_error_response(
+        "NOT_FOUND",
+        f"Resource not found: {request.path}",
+        404
+    )), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed_error(error):
+    """Handle 405 Method Not Allowed errors"""
+    logger.warning("Method not allowed", extra={
+        'status_code': 405,
+        'path': request.path,
+        'method': request.method
+    })
+    return jsonify(build_error_response(
+        "METHOD_NOT_ALLOWED",
+        f"Method {request.method} not allowed for {request.path}",
+        405
+    )), 405
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle 413 Request Entity Too Large errors"""
+    logger.warning("Request too large", extra={
+        'status_code': 413,
+        'path': request.path,
+        'content_length': request.content_length
+    })
+    return jsonify(build_error_response(
+        "REQUEST_TOO_LARGE",
+        "Request payload exceeds maximum allowed size (100MB)",
+        413
+    )), 413
+
+
+@app.errorhandler(429)
+def rate_limit_error(error):
+    """Handle 429 Rate Limit Exceeded errors"""
+    logger.warning("Rate limit exceeded", extra={
+        'status_code': 429,
+        'path': request.path,
+        'remote_addr': request.remote_addr
+    })
+    return jsonify(build_error_response(
+        "RATE_LIMITED",
+        "Too many requests. Please slow down.",
+        429,
+        {"retry_after": 60}
+    )), 429
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    """Handle 500 Internal Server errors"""
+    logger.error("Internal server error", extra={
+        'status_code': 500,
+        'path': request.path,
+        'error': str(error)
+    }, exc_info=True)
+    return jsonify(build_error_response(
+        "INTERNAL_ERROR",
+        "An internal error occurred. Please try again later.",
+        500
+    )), 500
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    """Catch-all handler for unexpected exceptions"""
+    import traceback
+    error_id = f"ERR-{int(time.time())}"
+
+    logger.error("Unexpected error occurred", extra={
+        'error_id': error_id,
+        'error_type': type(error).__name__,
+        'error_message': str(error),
+        'path': request.path,
+        'method': request.method,
+        'traceback': traceback.format_exc()
+    }, exc_info=True)
+
+    # Capture in Sentry if available
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(error)
+    except:
+        pass
+
+    return jsonify(build_error_response(
+        "UNEXPECTED_ERROR",
+        "An unexpected error occurred",
+        500,
+        {"error_id": error_id}
+    )), 500
+
+
+# ============================================================================
+# REQUEST LIFECYCLE HOOKS
+# ============================================================================
+
+@app.before_request
+def log_request_start():
+    """Log incoming requests for debugging"""
+    # Skip logging for static files and health checks
+    if request.path.startswith('/static') or request.path == '/health':
+        return
+
+    # Store request start time for duration calculation
+    request.start_time = time.time()
+
+
+@app.after_request
+def log_request_end(response):
+    """Log completed requests with timing"""
+    # Skip logging for static files and health checks
+    if request.path.startswith('/static') or request.path == '/health':
+        return response
+
+    # Calculate duration if start_time was set
+    duration_ms = None
+    if hasattr(request, 'start_time'):
+        duration_ms = int((time.time() - request.start_time) * 1000)
+
+    # Log non-200 responses or slow requests (>1s)
+    if response.status_code >= 400 or (duration_ms and duration_ms > 1000):
+        logger.info("Request completed", extra={
+            'path': request.path,
+            'method': request.method,
+            'status_code': response.status_code,
+            'duration_ms': duration_ms,
+            'remote_addr': request.remote_addr
+        })
+
+    return response
+
+
 # Initialize Swagger (if available)
 if 'FLASGGER_AVAILABLE' in globals() and FLASGGER_AVAILABLE and Swagger is not None:
     swagger_template = {
