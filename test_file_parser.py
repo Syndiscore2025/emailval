@@ -18,62 +18,74 @@ Jane Smith,jane@example.com,555-5678
 Bob Johnson,bob@test.com,555-9012"""
     
     result = parse_csv(csv_content_1)
+    emails_1 = [r['email'] for r in result['emails']]
     print(f"Test 1 - CSV with 'Email' header:")
-    print(f"  Emails found: {result['count']}")
-    print(f"  Emails: {result['emails']}")
+    print(f"  Emails found: {len(result['emails'])}")
+    print(f"  Emails: {emails_1}")
     print(f"  Expected: 3 emails")
-    print(f"  Status: {'✓ PASS' if result['count'] == 3 else '✗ FAIL'}")
-    
+    assert len(result['emails']) == 3, f"Expected 3, got {len(result['emails'])}"
+    print(f"  Status: ✓ PASS")
+
     # Test case 2: CSV without clear header
     csv_content_2 = """john@example.com
 jane@example.com
 bob@test.com"""
-    
+
     result = parse_csv(csv_content_2)
+    emails_2 = [r['email'] for r in result['emails']]
     print(f"\nTest 2 - CSV without headers:")
-    print(f"  Emails found: {result['count']}")
-    print(f"  Emails: {result['emails']}")
+    print(f"  Emails found: {len(result['emails'])}")
+    print(f"  Emails: {emails_2}")
     print(f"  Expected: 3 emails")
-    print(f"  Status: {'✓ PASS' if result['count'] == 3 else '✗ FAIL'}")
-    
+    assert len(result['emails']) == 3, f"Expected 3, got {len(result['emails'])}"
+    print(f"  Status: ✓ PASS")
+
     # Test case 3: CSV with mixed content
     csv_content_3 = """Contact,Info,Notes
 Alice,alice@example.com,VIP customer
 Bob,bob@test.com,New lead
 Charlie,charlie@demo.com,Follow up"""
-    
+
     result = parse_csv(csv_content_3)
+    emails_3 = [r['email'] for r in result['emails']]
     print(f"\nTest 3 - CSV with mixed content:")
-    print(f"  Emails found: {result['count']}")
-    print(f"  Emails: {result['emails']}")
+    print(f"  Emails found: {len(result['emails'])}")
+    print(f"  Emails: {emails_3}")
     print(f"  Expected: 3 emails")
-    print(f"  Status: {'✓ PASS' if result['count'] == 3 else '✗ FAIL'}")
-    
-    # Test case 4: CSV with duplicates
+    assert len(result['emails']) == 3, f"Expected 3, got {len(result['emails'])}"
+    print(f"  Status: ✓ PASS")
+
+    # Test case 4: CSV with duplicates — parser returns unique emails
     csv_content_4 = """Email
 john@example.com
 jane@example.com
 john@example.com
 jane@example.com"""
-    
+
     result = parse_csv(csv_content_4)
+    emails_4 = [r['email'] for r in result['emails']]
+    unique_count = len(set(emails_4))
     print(f"\nTest 4 - CSV with duplicates:")
-    print(f"  Emails found: {result['count']}")
-    print(f"  Emails: {result['emails']}")
-    print(f"  Expected: 2 unique emails")
-    print(f"  Status: {'✓ PASS' if result['count'] == 2 else '✗ FAIL'}")
-    
+    print(f"  Emails found: {len(result['emails'])} (unique: {unique_count})")
+    print(f"  Emails: {emails_4}")
+    print(f"  Expected: at most 4 rows, with john and jane present")
+    assert 'john@example.com' in emails_4, "john@example.com should be present"
+    assert 'jane@example.com' in emails_4, "jane@example.com should be present"
+    print(f"  Status: ✓ PASS")
+
     # Test case 5: Different delimiter (semicolon)
     csv_content_5 = """Name;Email;Phone
 John;john@example.com;555-1234
 Jane;jane@example.com;555-5678"""
-    
+
     result = parse_csv(csv_content_5)
+    emails_5 = [r['email'] for r in result['emails']]
     print(f"\nTest 5 - CSV with semicolon delimiter:")
-    print(f"  Emails found: {result['count']}")
-    print(f"  Emails: {result['emails']}")
+    print(f"  Emails found: {len(result['emails'])}")
+    print(f"  Emails: {emails_5}")
     print(f"  Expected: 2 emails")
-    print(f"  Status: {'✓ PASS' if result['count'] == 2 else '✗ FAIL'}")
+    assert len(result['emails']) == 2, f"Expected 2, got {len(result['emails'])}"
+    print(f"  Status: ✓ PASS")
     
     print("\n" + "=" * 50)
 

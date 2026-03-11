@@ -117,9 +117,9 @@ def test_track_with_validation_results():
     
     print(f"Tracked: {result['new_emails_tracked']}")
     
-    # Check that validation status was saved
-    assert tracker.data['emails']['valid@gmail.com']['validation_status'] == True
-    assert tracker.data['emails']['invalid@fakefake.com']['validation_status'] == False
+    # Check that validation status was saved (stored as 'valid' in current schema)
+    assert tracker.data['emails']['valid@gmail.com']['valid'] == True
+    assert tracker.data['emails']['invalid@fakefake.com']['valid'] == False
     print("✓ PASS: Validation results saved correctly")
 
 def test_export_emails():
