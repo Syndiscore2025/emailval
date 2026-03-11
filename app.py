@@ -2,7 +2,7 @@
 Universal Email Validator Flask Application
 Production-grade email validation API with file upload support
 """
-from flask import Flask, request, jsonify, render_template, redirect, session
+from flask import Flask, request, jsonify, render_template, redirect, session, has_request_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
@@ -51,6 +51,7 @@ from modules.lead_manager import get_lead_manager
 from modules.s3_delivery import S3Delivery, S3DeliveryError
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
 from modules.admin_auth import (
+    ADMIN_CREDS_FILE,
     authenticate_admin,
     create_admin_session,
     destroy_admin_session,
@@ -76,6 +77,7 @@ from modules.external_kpi import (
     normalize_kpi_range,
 )
 from modules.outbound_delivery_worker import dispatch_outbound_delivery, get_outbound_delivery_worker
+from modules.runtime_state_backend import get_runtime_state_backend, get_runtime_state_database_url
 
 app = Flask(__name__)
 
@@ -94,6 +96,43 @@ SMTP_ENABLED = os.getenv("SMTP_ENABLED", "false").lower() == "true"
 APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
 APP_START_TIME = time.time()
 
+DEFAULT_SECRET_KEY = 'dev-secret-key-change-in-production'
+REQUEST_ID_HEADER = 'X-Request-ID'
+_PLACEHOLDER_SHARED_SECRETS = {
+    '',
+    'replace-with-long-random-secret',
+    'replace-with-existing-fernet-key-if-restoring-crm-configs',
+}
+_PLACEHOLDER_ADMIN_PASSWORDS = {
+    '',
+    'admin123',
+    'replace-on-first-boot',
+    'replace-with-strong-password',
+}
+
+
+def is_production_environment() -> bool:
+    """Return whether the app is running with production-style settings."""
+    environment = (os.getenv('ENVIRONMENT') or os.getenv('FLASK_ENV') or 'production').strip().lower()
+    return environment == 'production'
+
+
+def _bool_env(name: str, default: str = 'false') -> bool:
+    return (os.getenv(name, default) or default).strip().lower() == 'true'
+
+
+def _ensure_request_id() -> Optional[str]:
+    """Create or reuse a request ID for the active request context."""
+    if not has_request_context():
+        return None
+
+    request_id = getattr(request, 'request_id', None)
+    if request_id:
+        return request_id
+
+    inbound_request_id = request.headers.get(REQUEST_ID_HEADER, '').strip()
+    request.request_id = inbound_request_id or f'req_{uuid4().hex}'
+    return request.request_id
 
 
 def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_smtp: bool = True):
@@ -463,12 +502,15 @@ def run_smtp_validation_background(job_id, emails_to_validate, tracker, include_
 
 # Flask app configuration
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size (increased for large datasets)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', DEFAULT_SECRET_KEY)
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 app.config['START_TIME'] = time.time()
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'csv', 'xls', 'xlsx', 'pdf'}
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0 if os.getenv("ENVIRONMENT", "production").lower() != "production" else 3600
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = is_production_environment()
 
 # CORS: read allowed origins from env var CORS_ORIGINS (comma-separated).
 # Defaults to "*" only when ENVIRONMENT != "production" so local dev still works.
@@ -486,13 +528,90 @@ else:
 CORS(app,
      supports_credentials=True,
      origins=_cors_origins,
-     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Admin-Token"],
-     expose_headers=["Content-Type"],
+     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Admin-Token", REQUEST_ID_HEADER],
+     expose_headers=["Content-Type", REQUEST_ID_HEADER],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 )
 
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+def _build_runtime_configuration_checks() -> Dict[str, Dict[str, Any]]:
+    """Build lightweight runtime configuration checks for startup and readiness."""
+    checks: Dict[str, Dict[str, Any]] = {}
+
+    configured_secret_key = str(app.config.get('SECRET_KEY') or '').strip()
+    secret_key_safe = bool(configured_secret_key) and configured_secret_key not in {
+        DEFAULT_SECRET_KEY,
+        *_PLACEHOLDER_SHARED_SECRETS,
+    }
+    checks['secret_key'] = {
+        'status': 'ok' if secret_key_safe else ('error' if is_production_environment() else 'warning'),
+        'configured': bool(configured_secret_key),
+        'using_default': configured_secret_key == DEFAULT_SECRET_KEY,
+    }
+
+    admin_password = (os.getenv('ADMIN_PASSWORD') or '').strip()
+    admin_creds_file_exists = os.path.exists(ADMIN_CREDS_FILE)
+    admin_password_safe = bool(admin_password) and admin_password not in _PLACEHOLDER_ADMIN_PASSWORDS
+    admin_auth_ready = admin_creds_file_exists or admin_password_safe
+    checks['admin_auth'] = {
+        'status': 'ok' if admin_auth_ready else ('error' if is_production_environment() else 'warning'),
+        'credentials_file_exists': admin_creds_file_exists,
+        'env_password_configured': bool(admin_password),
+        'env_password_safe': admin_password_safe,
+    }
+
+    webhook_signatures_required = _bool_env('REQUIRE_WEBHOOK_SIGNATURES')
+    webhook_signing_secret = (os.getenv('WEBHOOK_SIGNING_SECRET') or '').strip()
+    webhook_secret_safe = bool(webhook_signing_secret) and webhook_signing_secret not in _PLACEHOLDER_SHARED_SECRETS
+    checks['webhook_signing'] = {
+        'status': 'ok' if webhook_secret_safe else ('error' if webhook_signatures_required else 'warning'),
+        'signatures_required': webhook_signatures_required,
+        'secret_configured': webhook_secret_safe,
+    }
+
+    runtime_state_backend = get_runtime_state_backend()
+    runtime_state_database_url = get_runtime_state_database_url()
+    runtime_state_ready = runtime_state_backend != 'postgres' or bool(runtime_state_database_url)
+    checks['runtime_state'] = {
+        'status': 'ok' if runtime_state_ready else 'error',
+        'backend': runtime_state_backend,
+        'database_url_configured': bool(runtime_state_database_url),
+    }
+
+    checks['cors'] = {
+        'status': 'ok' if _cors_origins or not is_production_environment() else 'warning',
+        'allowed_origin_count': len(_cors_origins),
+        'same_origin_only': is_production_environment() and not _cors_origins,
+    }
+
+    checks['session_security'] = {
+        'status': 'ok',
+        'secure_cookie': bool(app.config.get('SESSION_COOKIE_SECURE')),
+        'httponly': bool(app.config.get('SESSION_COOKIE_HTTPONLY')),
+        'samesite': app.config.get('SESSION_COOKIE_SAMESITE'),
+    }
+
+    return checks
+
+
+def _log_startup_configuration_issues() -> None:
+    """Emit startup warnings/errors for unsafe runtime configuration."""
+    for check_name, details in _build_runtime_configuration_checks().items():
+        status = details.get('status')
+        if status == 'ok':
+            continue
+        log_method = logger.error if status in {'error', 'misconfigured'} else logger.warning
+        log_method('Runtime configuration check flagged an issue', extra={
+            'check_name': check_name,
+            'check_status': status,
+            **details,
+        })
+
+
+_log_startup_configuration_issues()
 
 
 # ============================================================================
@@ -511,6 +630,9 @@ def build_error_response(error_code: str, message: str, status_code: int, detail
     }
     if details:
         response["error"]["details"] = details
+    request_id = _ensure_request_id()
+    if request_id:
+        response["request_id"] = request_id
     return response
 
 
@@ -673,19 +795,25 @@ def handle_unexpected_error(error):
 @app.before_request
 def log_request_start():
     """Log incoming requests for debugging"""
-    # Skip logging for static files and health checks
-    if request.path.startswith('/static') or request.path == '/health':
-        return
+    _ensure_request_id()
 
     # Store request start time for duration calculation
     request.start_time = time.time()
+
+    # Skip logging for static files and health/readiness probes
+    if request.path.startswith('/static') or request.path in {'/health', '/ready'}:
+        return
 
 
 @app.after_request
 def log_request_end(response):
     """Log completed requests with timing"""
-    # Skip logging for static files and health checks
-    if request.path.startswith('/static') or request.path == '/health':
+    request_id = _ensure_request_id()
+    if request_id:
+        response.headers[REQUEST_ID_HEADER] = request_id
+
+    # Skip logging for static files and health/readiness probes
+    if request.path.startswith('/static') or request.path in {'/health', '/ready'}:
         return response
 
     # Calculate duration if start_time was set
@@ -1916,6 +2044,8 @@ def _build_health_checks() -> Dict[str, Dict[str, Any]]:
         'status': 'ok' if SMTP_ENABLED else 'disabled',
         'enabled': SMTP_ENABLED,
     }
+
+    checks.update(_build_runtime_configuration_checks())
 
     return checks
 

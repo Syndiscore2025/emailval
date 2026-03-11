@@ -751,10 +751,13 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         ))
 
     def test_health_endpoint_includes_runtime_checks_and_stays_200(self):
+        os.environ['SECRET_KEY'] = 'test-safe-secret-key-not-a-placeholder'
+        os.environ['ADMIN_PASSWORD'] = 'test-safe-admin-password'
         os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = 'configured-key'
         worker = DummyOutboundWorker()
 
-        with patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
+        with patch.dict(app_module.app.config, {'SECRET_KEY': 'test-safe-secret-key-not-a-placeholder'}, clear=False), \
+             patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
              patch.object(app_module, 'get_job_tracker', return_value=DummyStateManager('jobs')), \
              patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
              patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
@@ -771,15 +774,21 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertEqual(payload['checks']['api_key_store']['status'], 'ok')
         self.assertEqual(payload['checks']['outbound_delivery']['queue_capacity'], 500)
         self.assertEqual(payload['checks']['crm_encryption']['status'], 'ok')
+        self.assertEqual(payload['checks']['secret_key']['status'], 'ok')
+        self.assertEqual(payload['checks']['admin_auth']['status'], 'ok')
+        self.assertIn('cors', payload['checks'])
 
     def test_ready_endpoint_returns_503_for_misconfigured_external_kpi(self):
+        os.environ['SECRET_KEY'] = 'test-safe-secret-key-not-a-placeholder'
+        os.environ['ADMIN_PASSWORD'] = 'test-safe-admin-password'
         os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = 'configured-key'
         os.environ['EXTERNAL_KPI_ENABLED'] = 'true'
         os.environ.pop('EXTERNAL_KPI_EVENT_URL', None)
         os.environ.pop('EXTERNAL_KPI_API_KEY', None)
         worker = DummyOutboundWorker()
 
-        with patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
+        with patch.dict(app_module.app.config, {'SECRET_KEY': 'test-safe-secret-key-not-a-placeholder'}, clear=False), \
+             patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
              patch.object(app_module, 'get_job_tracker', return_value=DummyStateManager('jobs')), \
              patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
              patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
@@ -796,6 +805,40 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertEqual(ready_payload['checks']['external_kpi']['status'], 'misconfigured')
         self.assertIn('external_kpi', ready_payload['failures'])
         self.assertEqual(health_response.status_code, 200)
+
+    def test_ready_endpoint_returns_503_for_missing_production_secrets(self):
+        os.environ.pop('ADMIN_PASSWORD', None)
+        worker = DummyOutboundWorker()
+        missing_creds_path = os.path.join(self.temp_dir.name, 'no_admin_creds.json')
+
+        with patch.dict(app_module.app.config, {'SECRET_KEY': app_module.DEFAULT_SECRET_KEY}, clear=False), \
+             patch.object(app_module, 'ADMIN_CREDS_FILE', missing_creds_path), \
+             patch.object(app_module, 'is_production_environment', return_value=True), \
+             patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
+             patch.object(app_module, 'get_job_tracker', return_value=DummyStateManager('jobs')), \
+             patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
+             patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
+             patch.object(app_module, 'get_webhook_log_manager', return_value=self.webhook_log_manager), \
+             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker):
+            client = app_module.app.test_client()
+            response = client.get('/ready')
+
+        self.assertEqual(response.status_code, 503)
+        payload = response.get_json()
+        self.assertEqual(payload['checks']['secret_key']['status'], 'error')
+        self.assertEqual(payload['checks']['admin_auth']['status'], 'error')
+        self.assertIn('secret_key', payload['failures'])
+        self.assertIn('admin_auth', payload['failures'])
+
+    def test_error_responses_include_request_id_header_and_payload(self):
+        client = app_module.app.test_client()
+        response = client.get('/missing-route-that-does-not-exist',
+                              headers={app_module.REQUEST_ID_HEADER: 'req-test-abc123'})
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.headers.get(app_module.REQUEST_ID_HEADER), 'req-test-abc123')
+        payload = response.get_json()
+        self.assertEqual(payload.get('request_id'), 'req-test-abc123')
 
     def test_external_kpi_summary_endpoint_returns_polling_shape(self):
         os.environ['API_AUTH_ENABLED'] = 'false'

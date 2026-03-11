@@ -28,6 +28,27 @@ try:
 except ImportError:
     HAS_SENTRY = False
 
+try:
+    from flask import has_request_context, request as flask_request
+    HAS_FLASK_CONTEXT = True
+except ImportError:  # pragma: no cover
+    has_request_context = lambda: False  # type: ignore
+    flask_request = None  # type: ignore
+    HAS_FLASK_CONTEXT = False
+
+
+class RequestContextFilter(logging.Filter):
+    """Attach request_id to log records when a Flask request context is active."""
+
+    def filter(self, record):
+        request_id = getattr(record, 'request_id', None)
+        if not request_id and has_request_context():
+            request_id = getattr(flask_request, 'request_id', None) or (
+                flask_request.headers.get('X-Request-ID') if flask_request else None
+            )
+        record.request_id = request_id or '-'
+        return True
+
 
 class CustomJsonFormatter(logging.Formatter):
     """Custom JSON formatter that works without pythonjsonlogger"""
@@ -52,7 +73,10 @@ class CustomJsonFormatter(logging.Formatter):
             log_data['domain'] = record.domain
         if hasattr(record, 'status_code'):
             log_data['status_code'] = record.status_code
-        
+        request_id = getattr(record, 'request_id', None)
+        if request_id and request_id != '-':
+            log_data['request_id'] = request_id
+
         # Add exception info if present
         if record.exc_info:
             log_data['exception'] = self.formatException(record.exc_info)
@@ -82,6 +106,7 @@ def setup_logging(app=None):
     # Create console handler
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(getattr(logging, log_level, logging.INFO))
+    handler.addFilter(RequestContextFilter())
     
     # Use JSON formatter if available and enabled
     use_json = os.getenv('LOG_FORMAT', 'json').lower() == 'json'
