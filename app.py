@@ -468,13 +468,24 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 app.config['START_TIME'] = time.time()
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'csv', 'xls', 'xlsx', 'pdf'}
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0 if os.getenv("ENVIRONMENT", "production").lower() != "production" else 3600
 
-# Enable CORS for all routes (allows testing from file:// and other origins)
-# In production, restrict origins to specific domains
+# CORS: read allowed origins from env var CORS_ORIGINS (comma-separated).
+# Defaults to "*" only when ENVIRONMENT != "production" so local dev still works.
+# In production, set CORS_ORIGINS to your actual domain(s), e.g.:
+#   CORS_ORIGINS=https://app.switchbox.com,https://switchbox.com
+_cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
+if _cors_origins_env:
+    _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+elif os.getenv("ENVIRONMENT", "production").lower() != "production":
+    _cors_origins = ["*"]
+else:
+    # Production with no CORS_ORIGINS set — restrict to same-origin only
+    _cors_origins = []
+
 CORS(app,
      supports_credentials=True,
-     origins=["*"],  # Allow all origins for testing
+     origins=_cors_origins,
      allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Admin-Token"],
      expose_headers=["Content-Type"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
