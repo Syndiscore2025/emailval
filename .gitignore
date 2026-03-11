@@ -64,6 +64,13 @@ htmlcov/
 data/crm_configs.json
 data/crm_uploads.json
 
+# Runtime data and test artifacts
+data/email_history.json
+data/webhook_logs.json
+data/test_*.json
+data/*.lock
+test_output.txt
+
 # Backup files
 *.backup
 *_backup_*.json
