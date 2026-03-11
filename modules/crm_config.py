@@ -9,10 +9,14 @@ Manages CRM client settings including:
 """
 import json
 import os
+from copy import deepcopy
+from threading import Lock
 from typing import Dict, Any, Optional
 from datetime import datetime
 from cryptography.fernet import Fernet
 import base64
+
+from modules.json_store import json_file_lock, load_json_data, save_json_data_atomic
 
 
 # Configuration file path
@@ -65,45 +69,48 @@ def decrypt_value(encrypted_value: str) -> str:
 class CRMConfigManager:
     """Manages CRM client configurations"""
     
-    def __init__(self):
-        self.config_file = CRM_CONFIG_FILE
+    def __init__(self, config_file: str = CRM_CONFIG_FILE):
+        self.config_file = config_file
+        self.lock = Lock()
         self.configs = self._load_configs()
+
+    def _empty_configs(self) -> Dict[str, Any]:
+        return {}
     
     def _load_configs(self) -> Dict[str, Any]:
         """Load CRM configurations from file"""
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"[ERROR] Failed to load CRM configs: {e}")
-                return {}
-        return {}
+        data = load_json_data(self.config_file, self._empty_configs())
+        return data if isinstance(data, dict) else self._empty_configs()
+
+    def _refresh_from_disk(self):
+        self.configs = self._load_configs()
     
     def _save_configs(self):
         """Save CRM configurations to file"""
-        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-        with open(self.config_file, 'w') as f:
-            json.dump(self.configs, f, indent=2)
+        save_json_data_atomic(self.config_file, self.configs)
     
     def get_config(self, crm_id: str) -> Optional[Dict[str, Any]]:
         """Get configuration for a specific CRM client"""
-        config = self.configs.get(crm_id)
-        if not config:
-            return None
-        
-        # Decrypt AWS credentials before returning
-        if 's3_delivery' in config.get('settings', {}):
-            s3_config = config['settings']['s3_delivery']
-            if 'secret_access_key_encrypted' in s3_config:
-                s3_config['secret_access_key'] = decrypt_value(
-                    s3_config['secret_access_key_encrypted']
-                )
-        
-        return config
+        with self.lock:
+            self._refresh_from_disk()
+            config = deepcopy(self.configs.get(crm_id))
+            if not config:
+                return None
+
+            # Decrypt AWS credentials before returning without mutating stored state.
+            if 's3_delivery' in config.get('settings', {}):
+                s3_config = config['settings']['s3_delivery']
+                if 'secret_access_key_encrypted' in s3_config:
+                    s3_config['secret_access_key'] = decrypt_value(
+                        s3_config['secret_access_key_encrypted']
+                    )
+
+            return config
     
     def create_config(self, crm_id: str, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create new CRM configuration"""
+        config_data = deepcopy(config_data)
+
         # Encrypt AWS credentials if present
         if 's3_delivery' in config_data.get('settings', {}):
             s3_config = config_data['settings']['s3_delivery']
@@ -114,24 +121,26 @@ class CRMConfigManager:
                 # Remove plain text secret
                 del s3_config['secret_access_key']
         
-        config = {
-            'crm_id': crm_id,
-            'crm_vendor': config_data.get('crm_vendor', 'other'),
-            'api_key': config_data.get('api_key'),
-            'settings': config_data.get('settings', self._get_default_settings()),
-            'premium_features': config_data.get('premium_features', self._get_default_premium_features()),
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        }
-        
-        self.configs[crm_id] = config
-        self._save_configs()
+        with self.lock:
+            with json_file_lock(self.config_file):
+                self._refresh_from_disk()
+                config = {
+                    'crm_id': crm_id,
+                    'crm_vendor': config_data.get('crm_vendor', 'other'),
+                    'api_key': config_data.get('api_key'),
+                    'settings': config_data.get('settings', self._get_default_settings()),
+                    'premium_features': config_data.get('premium_features', self._get_default_premium_features()),
+                    'created_at': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat()
+                }
+                self.configs[crm_id] = config
+                self._save_configs()
+
         return self.get_config(crm_id)
 
     def update_config(self, crm_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update existing CRM configuration"""
-        if crm_id not in self.configs:
-            return None
+        updates = deepcopy(updates)
 
         # Encrypt AWS credentials if being updated
         if 's3_delivery' in updates.get('settings', {}):
@@ -142,25 +151,35 @@ class CRMConfigManager:
                 )
                 del s3_config['secret_access_key']
 
-        # Merge updates
-        config = self.configs[crm_id]
-        if 'settings' in updates:
-            config['settings'].update(updates['settings'])
-        if 'premium_features' in updates:
-            config['premium_features'].update(updates['premium_features'])
+        with self.lock:
+            with json_file_lock(self.config_file):
+                self._refresh_from_disk()
+                if crm_id not in self.configs:
+                    return None
 
-        config['updated_at'] = datetime.now().isoformat()
+                # Merge updates
+                config = self.configs[crm_id]
+                if 'settings' in updates:
+                    config['settings'].update(updates['settings'])
+                if 'premium_features' in updates:
+                    config['premium_features'].update(updates['premium_features'])
 
-        self._save_configs()
+                config['updated_at'] = datetime.now().isoformat()
+
+                self._save_configs()
+
         return self.get_config(crm_id)
 
     def delete_config(self, crm_id: str) -> bool:
         """Delete CRM configuration"""
-        if crm_id in self.configs:
-            del self.configs[crm_id]
-            self._save_configs()
-            return True
-        return False
+        with self.lock:
+            with json_file_lock(self.config_file):
+                self._refresh_from_disk()
+                if crm_id in self.configs:
+                    del self.configs[crm_id]
+                    self._save_configs()
+                    return True
+                return False
 
     def _get_default_settings(self) -> Dict[str, Any]:
         """Get default CRM settings"""

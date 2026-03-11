@@ -2486,17 +2486,17 @@
     },
     "test@gmail.com": {
       "first_seen": "2025-11-20T15:17:03.210994",
-      "last_seen": "2025-12-04T11:52:17.471307",
-      "send_count": 2,
-      "validation_count": 2,
+      "last_seen": "2026-03-11T13:49:04.674386",
+      "send_count": 9,
+      "validation_count": 9,
       "valid": true,
-      "type": "unknown",
+      "type": "personal",
       "smtp_verified": false,
       "is_disposable": false,
       "is_role_based": false,
       "is_catchall": false,
       "catchall_confidence": "low",
-      "last_validated": "2025-12-04T11:52:17.471307",
+      "last_validated": "2026-03-11T13:49:04.674386",
       "status": "valid"
     },
     "info@yahoo.com": {
@@ -2543,6 +2543,36 @@
       "catchall_confidence": "low",
       "last_validated": "2025-12-04T11:52:17.471307",
       "status": "valid"
+    },
+    "test@yahoo.com": {
+      "first_seen": "2026-03-11T12:29:02.072786",
+      "last_seen": "2026-03-11T13:49:04.674386",
+      "send_count": 7,
+      "validation_count": 7,
+      "valid": true,
+      "type": "personal",
+      "smtp_verified": false,
+      "is_disposable": false,
+      "is_role_based": false,
+      "is_catchall": false,
+      "catchall_confidence": "low",
+      "last_validated": "2026-03-11T13:49:04.674386",
+      "status": "valid"
+    },
+    "test@example.com": {
+      "first_seen": "2026-03-11T12:29:02.105215",
+      "last_seen": "2026-03-11T13:49:04.713623",
+      "send_count": 7,
+      "validation_count": 7,
+      "valid": true,
+      "type": "personal",
+      "smtp_verified": false,
+      "is_disposable": false,
+      "is_role_based": false,
+      "is_catchall": false,
+      "catchall_confidence": "low",
+      "last_validated": "2026-03-11T13:49:04.713623",
+      "status": "valid"
     }
   },
   "sessions": [
@@ -2570,11 +2600,151 @@
       "duplicates": 1,
       "session_type": "n8n",
       "duration_ms": 0
+    },
+    {
+      "timestamp": "2026-03-11T12:29:02.072786",
+      "emails_count": 2,
+      "new_emails": 1,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 11
+    },
+    {
+      "timestamp": "2026-03-11T12:29:02.105215",
+      "emails_count": 1,
+      "new_emails": 1,
+      "duplicates": 0,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 20
+    },
+    {
+      "timestamp": "2026-03-11T12:49:21.409140",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 12
+    },
+    {
+      "timestamp": "2026-03-11T12:49:21.435327",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 16
+    },
+    {
+      "timestamp": "2026-03-11T12:53:26.488717",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 6
+    },
+    {
+      "timestamp": "2026-03-11T12:53:26.504932",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 10
+    },
+    {
+      "timestamp": "2026-03-11T13:18:17.267712",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 36
+    },
+    {
+      "timestamp": "2026-03-11T13:18:17.320104",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 41
+    },
+    {
+      "timestamp": "2026-03-11T13:28:32.965172",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 10
+    },
+    {
+      "timestamp": "2026-03-11T13:28:32.998761",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 17
+    },
+    {
+      "timestamp": "2026-03-11T13:39:19.613267",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 14
+    },
+    {
+      "timestamp": "2026-03-11T13:39:19.643862",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 12
+    },
+    {
+      "timestamp": "2026-03-11T13:49:04.674386",
+      "emails_count": 2,
+      "new_emails": 0,
+      "duplicates": 2,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 12
+    },
+    {
+      "timestamp": "2026-03-11T13:49:04.713623",
+      "emails_count": 1,
+      "new_emails": 0,
+      "duplicates": 1,
+      "session_type": "webhook",
+      "integration_mode": "single_use",
+      "crm_vendor": "other",
+      "duration_ms": 23
     }
   ],
   "stats": {
-    "total_emails_tracked": 211,
-    "total_uploads": 3,
-    "total_duplicates_prevented": 1
+    "total_emails_tracked": 213,
+    "total_uploads": 17,
+    "total_duplicates_prevented": 20
   }
 }

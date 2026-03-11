@@ -8,6 +8,18 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 
+INTEGRATION_CONTRACT_VERSION = 'v1'
+
+
+def build_contract_metadata(response_format: str = 'standard') -> Dict[str, str]:
+    """Build stable integration-contract metadata for API consumers."""
+    return {
+        'version': INTEGRATION_CONTRACT_VERSION,
+        'response_format': response_format,
+        'change_policy': 'additive',
+    }
+
+
 def segregate_validation_results(
     validation_results: List[Dict[str, Any]],
     include_catchall_in_clean: bool = False,
@@ -172,8 +184,10 @@ def build_crm_response(
         'event': event,
         'integration_mode': integration_mode,
         'crm_vendor': crm_vendor,
+        'contract': build_contract_metadata('standard'),
         'summary': summary,
         'records': records,
+        'timestamp': datetime.now().isoformat(),
     }
 
     if job_id:
@@ -313,6 +327,7 @@ def build_segregated_crm_response(
         'event': event,
         'integration_mode': integration_mode,
         'crm_vendor': crm_vendor,
+        'contract': build_contract_metadata('segregated'),
         'summary': summary,
         'lists': segregated,
         'timestamp': datetime.now().isoformat()

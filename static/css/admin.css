@@ -284,6 +284,11 @@ body {
     color: #721c24;
 }
 
+.status-badge.pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
 /* SMTP Verification Badge */
 .smtp-badge {
     padding: 0.25rem 0.75rem;

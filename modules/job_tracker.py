@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from threading import Lock
 
+from modules.json_store import json_file_lock, load_json_data, save_json_data_atomic
+
 class JobTracker:
     """Track validation job progress"""
     
@@ -19,13 +21,8 @@ class JobTracker:
     
     def _load_jobs(self) -> Dict[str, Any]:
         """Load jobs from disk"""
-        if os.path.exists(self.data_file):
-            try:
-                with open(self.data_file, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
+        data = load_json_data(self.data_file, {})
+        return data if isinstance(data, dict) else {}
 
     def _refresh_from_disk(self):
         """Refresh in-memory jobs from disk.
@@ -43,37 +40,36 @@ class JobTracker:
 
     def _save_jobs(self):
         """Save jobs to disk"""
-        os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
-        with open(self.data_file, 'w') as f:
-            json.dump(self.jobs, f, indent=2)
+        save_json_data_atomic(self.data_file, self.jobs)
 
     def create_job(self, total_emails: int, session_info: Dict[str, Any] = None) -> str:
         """Create a new validation job"""
         job_id = str(uuid.uuid4())[:8]
 
         with self.lock:
-            # Always refresh first so we don't overwrite jobs created by other
-            # workers/processes.
-            self._refresh_from_disk()
+            with json_file_lock(self.data_file):
+                # Always refresh first so we don't overwrite jobs created by other
+                # workers/processes.
+                self._refresh_from_disk()
 
-            self.jobs[job_id] = {
-                "job_id": job_id,
-                "status": "pending",  # pending, running, completed, failed
-                "total_emails": total_emails,
-                "validated_count": 0,
-                "valid_count": 0,
-                "invalid_count": 0,
-                "disposable_count": 0,
-                "role_based_count": 0,
-                "personal_count": 0,
-                "catchall_count": 0,
-                "started_at": datetime.now().isoformat(),
-                "completed_at": None,
-                "session_info": session_info or {},
-                "webhook_url": None,
-                "error": None
-            }
-            self._save_jobs()
+                self.jobs[job_id] = {
+                    "job_id": job_id,
+                    "status": "pending",  # pending, running, completed, failed
+                    "total_emails": total_emails,
+                    "validated_count": 0,
+                    "valid_count": 0,
+                    "invalid_count": 0,
+                    "disposable_count": 0,
+                    "role_based_count": 0,
+                    "personal_count": 0,
+                    "catchall_count": 0,
+                    "started_at": datetime.now().isoformat(),
+                    "completed_at": None,
+                    "session_info": session_info or {},
+                    "webhook_url": None,
+                    "error": None
+                }
+                self._save_jobs()
 
         return job_id
 
@@ -81,56 +77,60 @@ class JobTracker:
                          disposable_count: int = None, role_based_count: int = None, personal_count: int = None, catchall_count: int = None):
         """Update job progress with detailed stats"""
         with self.lock:
-            # Refresh to merge with any updates written by other workers.
-            self._refresh_from_disk()
+            with json_file_lock(self.data_file):
+                # Refresh to merge with any updates written by other workers.
+                self._refresh_from_disk()
 
-            if job_id in self.jobs:
-                self.jobs[job_id]["validated_count"] = validated_count
-                if valid_count is not None:
-                    self.jobs[job_id]["valid_count"] = valid_count
-                if invalid_count is not None:
-                    self.jobs[job_id]["invalid_count"] = invalid_count
-                if disposable_count is not None:
-                    self.jobs[job_id]["disposable_count"] = disposable_count
-                if role_based_count is not None:
-                    self.jobs[job_id]["role_based_count"] = role_based_count
-                if personal_count is not None:
-                    self.jobs[job_id]["personal_count"] = personal_count
-                if catchall_count is not None:
-                    self.jobs[job_id]["catchall_count"] = catchall_count
-                if self.jobs[job_id]["status"] == "pending":
-                    self.jobs[job_id]["status"] = "running"
-                self._save_jobs()
+                if job_id in self.jobs:
+                    self.jobs[job_id]["validated_count"] = validated_count
+                    if valid_count is not None:
+                        self.jobs[job_id]["valid_count"] = valid_count
+                    if invalid_count is not None:
+                        self.jobs[job_id]["invalid_count"] = invalid_count
+                    if disposable_count is not None:
+                        self.jobs[job_id]["disposable_count"] = disposable_count
+                    if role_based_count is not None:
+                        self.jobs[job_id]["role_based_count"] = role_based_count
+                    if personal_count is not None:
+                        self.jobs[job_id]["personal_count"] = personal_count
+                    if catchall_count is not None:
+                        self.jobs[job_id]["catchall_count"] = catchall_count
+                    if self.jobs[job_id]["status"] == "pending":
+                        self.jobs[job_id]["status"] = "running"
+                    self._save_jobs()
 
     def complete_job(self, job_id: str, success: bool = True, error: str = None):
         """Mark job as completed"""
         with self.lock:
-            # Refresh first so we don't clobber progress updates from another
-            # worker.
-            self._refresh_from_disk()
+            with json_file_lock(self.data_file):
+                # Refresh first so we don't clobber progress updates from another
+                # worker.
+                self._refresh_from_disk()
 
-            if job_id in self.jobs:
-                self.jobs[job_id]["status"] = "completed" if success else "failed"
-                self.jobs[job_id]["completed_at"] = datetime.now().isoformat()
-                if error:
-                    self.jobs[job_id]["error"] = error
-                self._save_jobs()
+                if job_id in self.jobs:
+                    self.jobs[job_id]["status"] = "completed" if success else "failed"
+                    self.jobs[job_id]["completed_at"] = datetime.now().isoformat()
+                    if error:
+                        self.jobs[job_id]["error"] = error
+                    self._save_jobs()
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status"""
-        # Always read fresh state from disk so /api/jobs and SSE streaming see
-        # the latest progress regardless of which Gunicorn worker handles the
-        # request.
-        self._refresh_from_disk()
-        return self.jobs.get(job_id)
+        with self.lock:
+            # Always read fresh state from disk so /api/jobs and SSE streaming see
+            # the latest progress regardless of which Gunicorn worker handles the
+            # request.
+            self._refresh_from_disk()
+            return self.jobs.get(job_id)
 
     def set_webhook(self, job_id: str, webhook_url: str):
         """Set webhook URL for job completion notification"""
         with self.lock:
-            self._refresh_from_disk()
-            if job_id in self.jobs:
-                self.jobs[job_id]["webhook_url"] = webhook_url
-                self._save_jobs()
+            with json_file_lock(self.data_file):
+                self._refresh_from_disk()
+                if job_id in self.jobs:
+                    self.jobs[job_id]["webhook_url"] = webhook_url
+                    self._save_jobs()
 
     def get_progress_percent(self, job_id: str) -> float:
         """Get progress as percentage"""

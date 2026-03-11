@@ -1,0 +1,19 @@
+[Unit]
+Description=Email Validator Gunicorn service
+After=network.target
+
+[Service]
+Type=simple
+User=emailval
+Group=emailval
+WorkingDirectory=/opt/emailval/app
+EnvironmentFile=/etc/emailval/emailval.env
+ExecStart=/opt/emailval/venv/bin/gunicorn -c /opt/emailval/app/deploy/digitalocean/gunicorn.conf.py app:app
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

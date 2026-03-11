@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify, render_template, redirect, session
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import hmac
 import hashlib
 import json
@@ -40,9 +40,11 @@ from modules.crm_adapter import (
     parse_crm_request,
     build_crm_response,
     build_segregated_crm_response,
+    build_contract_metadata,
     segregate_validation_results,
     get_crm_event_type,
-    validate_crm_vendor
+    validate_crm_vendor,
+    INTEGRATION_CONTRACT_VERSION,
 )
 from modules.crm_config import get_crm_config_manager
 from modules.lead_manager import get_lead_manager
@@ -61,6 +63,19 @@ from modules.obvious_invalid import is_obviously_invalid
 from modules.logger import init_logger, get_logger, PerformanceTimer
 from modules.backup_manager import get_backup_manager
 from modules.n8n_integration import n8n_bp
+from modules.webhook_log_manager import get_webhook_log_manager
+from modules.external_kpi import (
+    build_external_kpi_payload,
+    build_kpi_summary,
+    external_kpi_configured,
+    external_kpi_enabled,
+    get_external_kpi_api_key,
+    get_external_kpi_app_slug,
+    get_external_kpi_auth_header,
+    get_external_kpi_event_url,
+    normalize_kpi_range,
+)
+from modules.outbound_delivery_worker import dispatch_outbound_delivery, get_outbound_delivery_worker
 
 app = Flask(__name__)
 
@@ -76,6 +91,8 @@ logger.info("Email Validator application starting", extra={
 
 # Global feature flag: controls whether SMTP verification is available anywhere in the app
 SMTP_ENABLED = os.getenv("SMTP_ENABLED", "false").lower() == "true"
+APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
+APP_START_TIME = time.time()
 
 
 
@@ -702,6 +719,11 @@ else:
 
 # Webhook / remote file configuration
 WEBHOOK_SIGNATURE_HEADER = "X-Webhook-Signature"
+WEBHOOK_SIGNATURE_V2_HEADER = "X-Webhook-Signature-V2"
+WEBHOOK_TIMESTAMP_HEADER = "X-Webhook-Timestamp"
+INTEGRATION_CONTRACT_HEADER = "X-Integration-Contract-Version"
+IDEMPOTENCY_HEADER = "X-Idempotency-Key"
+IDEMPOTENT_REPLAY_HEADER = "X-Idempotent-Replay"
 MAX_REMOTE_FILE_SIZE = 16 * 1024 * 1024  # 16MB safety limit for remote files
 
 
@@ -711,28 +733,289 @@ def allowed_file(filename: str) -> bool:
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a boolean flag from the environment."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() == 'true'
+
+
+def is_production_environment() -> bool:
+    """Return True only when production mode is explicitly configured."""
+    environment = (os.getenv('FLASK_ENV') or os.getenv('ENVIRONMENT') or '').lower()
+    return environment == 'production'
+
+
+def require_webhook_signatures() -> bool:
+    """Require inbound webhook signatures in explicit production by default."""
+    configured = os.getenv('REQUIRE_WEBHOOK_SIGNATURES')
+    if configured is not None:
+        return configured.lower() == 'true'
+    return is_production_environment()
+
+
+def require_webhook_timestamps() -> bool:
+    """Require timestamped v2 signatures only when explicitly enabled."""
+    return _env_flag('REQUIRE_WEBHOOK_TIMESTAMP', default=False)
+
+
+def get_webhook_max_signature_age() -> int:
+    """Maximum accepted age for timestamped webhook signatures."""
+    try:
+        return int(os.getenv('WEBHOOK_MAX_SIGNATURE_AGE_SECONDS', '300'))
+    except ValueError:
+        return 300
+
+
+def compute_webhook_signature(secret: str, body: bytes, timestamp: str = None) -> str:
+    """Compute a webhook signature.
+
+    Legacy mode signs the raw body only. Timestamped v2 mode signs the bytes of
+    "<timestamp>.<body>".
+    """
+    message = body if timestamp is None else f"{timestamp}.".encode('utf-8') + body
+    return hmac.new(secret.encode('utf-8'), message, hashlib.sha256).hexdigest()
+
+
+def attach_contract_headers(response, contract: Dict[str, Any] = None):
+    """Attach stable integration metadata as response headers."""
+    contract = contract or {}
+    response.headers[INTEGRATION_CONTRACT_HEADER] = contract.get('version', INTEGRATION_CONTRACT_VERSION)
+    return response
+
+
+def compute_request_hash(body: bytes) -> str:
+    """Compute a stable hash for the raw request body."""
+    return hashlib.sha256(body or b"").hexdigest()
+
+
+def get_request_idempotency_key(data: Dict[str, Any] = None) -> Optional[str]:
+    """Read an idempotency key from header first, then request body."""
+    header_value = request.headers.get(IDEMPOTENCY_HEADER)
+    if isinstance(header_value, str) and header_value.strip():
+        return header_value.strip()
+
+    if isinstance(data, dict):
+        body_value = data.get('idempotency_key')
+        if isinstance(body_value, str) and body_value.strip():
+            return body_value.strip()
+
+    return None
+
+
+def build_contract_response(payload: Dict[str, Any], status_code: int):
+    """Build a JSON response with stable contract headers."""
+    response = attach_contract_headers(jsonify(payload), payload.get('contract'))
+    return response, status_code
+
+
+def store_idempotent_response(idempotency_key: Optional[str], request_hash: str,
+                              payload: Dict[str, Any], status_code: int) -> None:
+    """Persist a response for a future idempotent replay."""
+    if not idempotency_key:
+        return
+
+    get_webhook_log_manager().store_idempotent_response(
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        response_status=status_code,
+        response_body=payload,
+        response_headers={
+            INTEGRATION_CONTRACT_HEADER: payload.get('contract', {}).get('version', INTEGRATION_CONTRACT_VERSION),
+        },
+    )
+
+
+def deliver_external_kpi_event(event_record: Dict[str, Any]) -> bool:
+    """Best-effort delivery of an operational event to an external KPI sink."""
+    if not external_kpi_enabled() or not external_kpi_configured():
+        return False
+
+    event_id = event_record.get('event_id')
+    if not event_id:
+        return False
+
+    destination_key = get_external_kpi_event_url()
+    webhook_log_manager = get_webhook_log_manager()
+    existing_delivery = webhook_log_manager.get_external_delivery(event_id, destination_key)
+    if existing_delivery and existing_delivery.get('status') == 'delivered':
+        return True
+
+    payload = build_external_kpi_payload(event_record, app_slug=get_external_kpi_app_slug())
+    request_body = json.dumps(payload).encode('utf-8')
+    headers = {
+        'Content-Type': 'application/json',
+        get_external_kpi_auth_header(): get_external_kpi_api_key(),
+    }
+
+    try:
+        req = urllib.request.Request(
+            get_external_kpi_event_url(),
+            data=request_body,
+            headers=headers,
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            status = getattr(response, 'status', getattr(response, 'code', 200))
+
+        if 200 <= status < 300:
+            webhook_log_manager.store_external_delivery(
+                event_id,
+                destination_key,
+                status='delivered',
+                response_status=status,
+            )
+            logger.info('External KPI event delivered', extra={
+                'event_id': event_id,
+                'event_name': payload.get('event_name'),
+                'status_code': status,
+            })
+            return True
+
+        webhook_log_manager.store_external_delivery(
+            event_id,
+            destination_key,
+            status='failed',
+            response_status=status,
+            error=f'Unexpected external KPI status code: {status}',
+        )
+        logger.warning('External KPI event failed', extra={
+            'event_id': event_id,
+            'status_code': status,
+        })
+        return False
+    except Exception as exc:
+        webhook_log_manager.store_external_delivery(
+            event_id,
+            destination_key,
+            status='failed',
+            error=str(exc),
+        )
+        logger.warning('External KPI delivery error', extra={
+            'event_id': event_id,
+            'error': str(exc),
+        })
+        return False
+
+
+def start_external_kpi_delivery(event_record: Dict[str, Any]) -> None:
+    """Dispatch KPI delivery without blocking the main request path."""
+    if not external_kpi_enabled() or not external_kpi_configured():
+        return
+    dispatch_outbound_delivery(
+        deliver_external_kpi_event,
+        event_record,
+        job_name='external_kpi_delivery',
+    )
+
+
+def record_operational_event(event_type: str, publish_external: bool = True, **details) -> Dict[str, Any]:
+    """Persist an operational event and optionally publish it externally."""
+    event_record = get_webhook_log_manager().record_event(event_type, **details)
+    if publish_external:
+        start_external_kpi_delivery(event_record)
+    return event_record
+
+
+def get_idempotent_response(idempotency_key: Optional[str], request_hash: str):
+    """Return a stored response if an idempotency key has already been used."""
+    if not idempotency_key:
+        return None
+
+    webhook_log_manager = get_webhook_log_manager()
+    stored = webhook_log_manager.get_idempotent_response(idempotency_key)
+    if not stored:
+        return None
+
+    if stored.get('request_hash') != request_hash:
+        conflict_payload = {
+            'error': 'Idempotency key has already been used for a different request payload',
+            'idempotency_key': idempotency_key,
+            'contract': build_contract_metadata('error'),
+            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        }
+        record_operational_event(
+            'webhook_idempotency_conflict',
+            status='rejected',
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            original_request_hash=stored.get('request_hash'),
+            response_status=409,
+        )
+        response = attach_contract_headers(jsonify(conflict_payload), conflict_payload.get('contract'))
+        return response, 409
+
+    payload = stored.get('response_body', {})
+    response = attach_contract_headers(jsonify(payload), payload.get('contract'))
+    for header_name, header_value in (stored.get('response_headers') or {}).items():
+        response.headers[header_name] = header_value
+    response.headers[IDEMPOTENT_REPLAY_HEADER] = 'true'
+
+    record_operational_event(
+        'webhook_idempotent_replay',
+        status='replayed',
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        response_status=stored.get('response_status', 200),
+        event=payload.get('event'),
+    )
+    return response, stored.get('response_status', 200)
+
+
 def verify_webhook_signature() -> (bool, str):
     """Verify HMAC signature for incoming webhook requests.
 
-    If WEBHOOK_SIGNING_SECRET is not set, signature verification is skipped
-    (useful for local development).
+    Supports two inbound formats:
+    - Legacy: X-Webhook-Signature over the raw request body
+    - V2: X-Webhook-Signature-V2 over "<timestamp>.<body>"
+
+    In explicit production, signatures are required by default. Timestamped v2
+    signatures can be required via REQUIRE_WEBHOOK_TIMESTAMP=true.
 
     Returns:
         Tuple of (is_valid, error_message). If is_valid is True, error_message
         will be None.
     """
     secret = os.getenv('WEBHOOK_SIGNING_SECRET')
+    signatures_required = require_webhook_signatures()
+    timestamps_required = require_webhook_timestamps()
+
     if not secret:
-        # Signing not configured; treat as valid for now
+        if signatures_required:
+            return False, "Webhook signing is required but WEBHOOK_SIGNING_SECRET is not configured"
         return True, None
 
     signature = request.headers.get(WEBHOOK_SIGNATURE_HEADER)
+    signature_v2 = request.headers.get(WEBHOOK_SIGNATURE_V2_HEADER)
+    timestamp = request.headers.get(WEBHOOK_TIMESTAMP_HEADER)
+    body = request.get_data(cache=True) or b""
+
+    if signature_v2:
+        if not timestamp:
+            return False, "Missing webhook timestamp header"
+
+        expected_v2 = compute_webhook_signature(secret, body, timestamp=timestamp)
+        if not hmac.compare_digest(expected_v2, signature_v2):
+            return False, "Invalid timestamped webhook signature"
+
+        try:
+            timestamp_age = abs(int(time.time()) - int(timestamp))
+        except ValueError:
+            return False, "Invalid webhook timestamp"
+
+        if timestamp_age > get_webhook_max_signature_age():
+            return False, "Webhook timestamp outside allowed window"
+
+        return True, None
+
+    if timestamps_required:
+        return False, "Missing timestamped webhook signature headers"
+
     if not signature:
         return False, "Missing webhook signature header"
 
-    # Use raw request body for deterministic signing
-    body = request.get_data(cache=True) or b""
-    expected = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
+    expected = compute_webhook_signature(secret, body)
 
     if not hmac.compare_digest(expected, signature):
         return False, "Invalid webhook signature"
@@ -778,34 +1061,111 @@ def download_remote_file(url: str, max_size: int = MAX_REMOTE_FILE_SIZE, timeout
 
 
 def start_callback_delivery(callback_url: str, payload: Dict[str, Any], max_retries: int = 3, timeout: int = 10,
-                            backoff_factor: float = 1.5) -> None:
+                            backoff_factor: float = 1.5, signature_secret: str = None,
+                            delivery_context: Dict[str, Any] = None) -> None:
     """Kick off background delivery of webhook callback with retries."""
+
+    delivery_context = delivery_context or {}
+    record_operational_event(
+        'callback_delivery',
+        status='queued',
+        callback_url=callback_url,
+        max_retries=max_retries,
+        source=delivery_context.get('source', 'webhook_validate'),
+        job_id=delivery_context.get('job_id'),
+        idempotency_key=delivery_context.get('idempotency_key'),
+        event=payload.get('event'),
+    )
 
     def _deliver():
         data_bytes = json.dumps(payload).encode('utf-8')
         for attempt in range(1, max_retries + 1):
             try:
+                headers = {
+                    'Content-Type': 'application/json',
+                    INTEGRATION_CONTRACT_HEADER: INTEGRATION_CONTRACT_VERSION,
+                }
+
+                if signature_secret:
+                    timestamp = str(int(time.time()))
+                    headers[WEBHOOK_SIGNATURE_HEADER] = compute_webhook_signature(signature_secret, data_bytes)
+                    headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp
+                    headers[WEBHOOK_SIGNATURE_V2_HEADER] = compute_webhook_signature(
+                        signature_secret,
+                        data_bytes,
+                        timestamp=timestamp,
+                    )
+
                 req = urllib.request.Request(
                     callback_url,
                     data=data_bytes,
-                    headers={'Content-Type': 'application/json'},
+                    headers=headers,
                     method='POST'
                 )
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     # Consider any 2xx code a success
                     status = getattr(resp, 'status', getattr(resp, 'code', 200))
                     if 200 <= status < 300:
+                        record_operational_event(
+                            'callback_delivery',
+                            status='delivered',
+                            callback_url=callback_url,
+                            attempt=attempt,
+                            status_code=status,
+                            source=delivery_context.get('source', 'webhook_validate'),
+                            job_id=delivery_context.get('job_id'),
+                            idempotency_key=delivery_context.get('idempotency_key'),
+                            event=payload.get('event'),
+                        )
+                        logger.info("Async callback delivered", extra={
+                            'callback_url': callback_url,
+                            'status_code': status,
+                            'attempt': attempt,
+                        })
                         return
             except Exception as e:
                 if attempt == max_retries:
-                    # For now, just log to stdout; in production, route to proper logging
-                    print(f"[callback] Failed to deliver to {callback_url} after {max_retries} attempts: {e}")
+                    record_operational_event(
+                        'callback_delivery',
+                        status='failed',
+                        callback_url=callback_url,
+                        attempt=attempt,
+                        error=str(e),
+                        source=delivery_context.get('source', 'webhook_validate'),
+                        job_id=delivery_context.get('job_id'),
+                        idempotency_key=delivery_context.get('idempotency_key'),
+                        event=payload.get('event'),
+                    )
+                    logger.error("Async callback delivery failed", extra={
+                        'callback_url': callback_url,
+                        'attempts': max_retries,
+                        'error': str(e),
+                    })
                 else:
                     sleep_time = backoff_factor ** (attempt - 1)
+                    record_operational_event(
+                        'callback_delivery',
+                        status='retrying',
+                        callback_url=callback_url,
+                        attempt=attempt,
+                        sleep_seconds=sleep_time,
+                        error=str(e),
+                        source=delivery_context.get('source', 'webhook_validate'),
+                        job_id=delivery_context.get('job_id'),
+                        idempotency_key=delivery_context.get('idempotency_key'),
+                        event=payload.get('event'),
+                    )
+                    logger.warning("Async callback delivery retry scheduled", extra={
+                        'callback_url': callback_url,
+                        'attempt': attempt,
+                        'sleep_seconds': sleep_time,
+                    })
                     time.sleep(sleep_time)
 
-    thread = threading.Thread(target=_deliver, daemon=True)
-    thread.start()
+    dispatch_outbound_delivery(
+        _deliver,
+        job_name='webhook_callback_delivery',
+    )
 
 
 def validate_email_complete(email: str, include_smtp: bool = False) -> Dict[str, Any]:
@@ -1418,22 +1778,177 @@ def get_logs():
 def get_webhook_logs():
     """Get webhook logs"""
     try:
-        # In a real app, load from webhook log file
-        # For now, return sample data
-        logs = []
-        return jsonify({"success": True, "logs": logs})
+        limit = request.args.get('limit', '100')
+        try:
+            limit_int = max(1, min(int(limit), 500))
+        except ValueError:
+            limit_int = 100
+
+        webhook_log_manager = get_webhook_log_manager()
+        logs = webhook_log_manager.get_logs(limit=limit_int)
+        summary = webhook_log_manager.get_summary()
+        return jsonify({"success": True, "logs": logs, "summary": summary})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/integrations/kpi-summary', methods=['GET'])
+@require_api_key
+def get_external_kpi_summary():
+    """Return a pollable KPI summary for external dashboards."""
+    try:
+        range_value = normalize_kpi_range(request.args.get('range', '7d'))
+        try:
+            activity_limit = max(1, min(int(request.args.get('limit', '20')), 100))
+        except ValueError:
+            activity_limit = 20
+
+        summary = build_kpi_summary(
+            get_webhook_log_manager().get_events(),
+            range_value=range_value,
+            activity_limit=activity_limit,
+            app_slug=get_external_kpi_app_slug(),
+        )
+        return jsonify(summary), 200
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+def _build_health_checks() -> Dict[str, Dict[str, Any]]:
+    """Collect lightweight runtime checks for health/readiness endpoints."""
+    checks: Dict[str, Dict[str, Any]] = {}
+    data_dir = os.path.join(app.root_path, 'data')
+
+    exists = os.path.isdir(data_dir)
+    readable = os.access(data_dir, os.R_OK) if exists else False
+    writable = os.access(data_dir, os.W_OK) if exists else False
+    checks['data_directory'] = {
+        'status': 'ok' if exists and readable and writable else 'error',
+        'path': data_dir,
+        'exists': exists,
+        'readable': readable,
+        'writable': writable,
+    }
+
+    try:
+        checks['api_key_store'] = {
+            'status': 'ok',
+            'total_keys': len(get_key_manager().list_keys()),
+        }
+    except Exception as exc:
+        checks['api_key_store'] = {'status': 'error', 'error': str(exc)}
+
+    try:
+        checks['job_tracker_store'] = {
+            'status': 'ok',
+            'tracked_jobs': len(getattr(get_job_tracker(), 'jobs', {})),
+        }
+    except Exception as exc:
+        checks['job_tracker_store'] = {'status': 'error', 'error': str(exc)}
+
+    try:
+        checks['crm_config_store'] = {
+            'status': 'ok',
+            'total_configs': len(getattr(get_crm_config_manager(), 'configs', {})),
+        }
+    except Exception as exc:
+        checks['crm_config_store'] = {'status': 'error', 'error': str(exc)}
+
+    try:
+        checks['crm_upload_store'] = {
+            'status': 'ok',
+            'total_uploads': len(getattr(get_lead_manager(), 'uploads', {})),
+        }
+    except Exception as exc:
+        checks['crm_upload_store'] = {'status': 'error', 'error': str(exc)}
+
+    try:
+        summary = get_webhook_log_manager().get_summary()
+        checks['webhook_log_store'] = {
+            'status': 'ok',
+            'total_events': summary.get('total_events', 0),
+            'total_idempotency_keys': summary.get('total_idempotency_keys', 0),
+        }
+    except Exception as exc:
+        checks['webhook_log_store'] = {'status': 'error', 'error': str(exc)}
+
+    try:
+        checks['outbound_delivery'] = {
+            'status': 'ok',
+            **get_outbound_delivery_worker().get_status(),
+        }
+    except Exception as exc:
+        checks['outbound_delivery'] = {'status': 'error', 'error': str(exc)}
+
+    external_enabled = external_kpi_enabled()
+    external_configured = external_kpi_configured()
+    checks['external_kpi'] = {
+        'status': 'disabled' if not external_enabled else ('ok' if external_configured else 'misconfigured'),
+        'enabled': external_enabled,
+        'configured': external_configured,
+        'app_slug': get_external_kpi_app_slug(),
+        'auth_header': get_external_kpi_auth_header(),
+    }
+
+    crm_key_configured = bool(os.getenv('CRM_CONFIG_ENCRYPTION_KEY'))
+    checks['crm_encryption'] = {
+        'status': 'ok' if crm_key_configured else 'warning',
+        'configured': crm_key_configured,
+    }
+
+    checks['smtp_validation'] = {
+        'status': 'ok' if SMTP_ENABLED else 'disabled',
+        'enabled': SMTP_ENABLED,
+    }
+
+    return checks
+
+
+def _build_health_payload() -> Dict[str, Any]:
+    """Build a compatibility-safe health payload with readiness details."""
+    checks = _build_health_checks()
+    critical_failures = []
+    warnings = []
+
+    for name, check in checks.items():
+        status = check.get('status')
+        if status == 'error' or (name == 'external_kpi' and status == 'misconfigured'):
+            critical_failures.append(name)
+        elif status in {'warning', 'misconfigured'}:
+            warnings.append(name)
+
+    ready = not critical_failures
+    overall_status = 'healthy'
+    if critical_failures:
+        overall_status = 'unhealthy'
+    elif warnings:
+        overall_status = 'degraded'
+
+    return {
+        'status': overall_status,
+        'ready': ready,
+        'service': 'email-validator',
+        'version': APP_VERSION,
+        'integration_contract_version': INTEGRATION_CONTRACT_VERSION,
+        'uptime_seconds': max(0, int(time.time() - APP_START_TIME)),
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'checks': checks,
+        'failures': critical_failures,
+        'warnings': warnings,
+    }
+
+
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint for Render"""
-    return jsonify({
-        "status": "healthy",
-        "service": "email-validator",
-        "version": "1.0.0"
-    }), 200
+    """Compatibility-safe health endpoint with additional runtime details."""
+    return jsonify(_build_health_payload()), 200
+
+
+@app.route('/ready', methods=['GET'])
+def ready():
+    """Readiness probe that returns 503 when critical runtime checks fail."""
+    payload = _build_health_payload()
+    return jsonify(payload), 200 if payload.get('ready') else 503
 
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
@@ -1627,6 +2142,11 @@ def api_docs():
         "interactive_docs": False,
         "message": "Install 'flasgger' to enable interactive Swagger UI at /docs.",
         "install_command": "pip install flasgger",
+        "integration_contract": {
+            "version": INTEGRATION_CONTRACT_VERSION,
+            "header": INTEGRATION_CONTRACT_HEADER,
+            "change_policy": "additive",
+        },
         "endpoints": [
             {"path": "/health", "method": "GET", "description": "Service health check"},
             {"path": "/validate", "method": "POST", "description": "Validate a single email"},
@@ -1640,8 +2160,17 @@ def api_docs():
         "authentication": {
             "status": "configurable",
             "header": "X-API-Key",
+            "query_param": "api_key",
+            "query_param_enabled_when": "API_KEY_ALLOW_QUERY_PARAM=true (disabled by default in explicit production)",
             "enabled_when": "API_AUTH_ENABLED=true",
             "note": "When enabled, all core validation and tracker endpoints require a valid API key. Admins must set ADMIN_API_TOKEN to manage keys via /api/keys."
+        },
+        "webhook_security": {
+            "legacy_signature_header": WEBHOOK_SIGNATURE_HEADER,
+            "timestamp_header": WEBHOOK_TIMESTAMP_HEADER,
+            "timestamped_signature_header": WEBHOOK_SIGNATURE_V2_HEADER,
+            "required_when": "REQUIRE_WEBHOOK_SIGNATURES=true (defaults to true in explicit production)",
+            "timestamp_required_when": "REQUIRE_WEBHOOK_TIMESTAMP=true",
         },
     }), 200
 
@@ -2043,6 +2572,11 @@ def webhook_validate():
       429:
         description: Rate limit exceeded
     """
+    data = None
+    idempotency_key = None
+    raw_body = request.get_data(cache=True) or b""
+    request_hash = compute_request_hash(raw_body)
+
     try:
         # Optional webhook signature verification
         is_valid_sig, sig_error = verify_webhook_signature()
@@ -2058,6 +2592,11 @@ def webhook_validate():
                 "error": "No JSON data provided"
             }), 400
 
+        idempotency_key = get_request_idempotency_key(data)
+        idempotent_response = get_idempotent_response(idempotency_key, request_hash)
+        if idempotent_response is not None:
+            return idempotent_response
+
         # Parse CRM request metadata
         crm_data = parse_crm_request(data)
         integration_mode = crm_data['integration_mode']
@@ -2067,6 +2606,7 @@ def webhook_validate():
         # Extract options
         include_smtp = data.get('include_smtp', False)
         callback_url = data.get('callback_url')
+        callback_signature_secret = data.get('callback_signature_secret')
 
         # Extract emails from various possible formats
         emails = list(crm_data['emails'])  # Start with emails from crm_context
@@ -2141,6 +2681,17 @@ def webhook_validate():
             return jsonify({
                 "error": "No email addresses found in request"
             }), 400
+
+        record_operational_event(
+            'webhook_received',
+            status='received',
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            integration_mode=integration_mode,
+            crm_vendor=crm_vendor,
+            callback_url=callback_url,
+            email_count=len(emails),
+        )
 
         # Validate all emails
         results = []
@@ -2313,20 +2864,63 @@ def webhook_validate():
         # If a callback_url is provided, send results asynchronously and
         # return an acknowledgment response with a job_id
         if callback_url:
-            start_callback_delivery(callback_url, response)
-
             ack = {
                 "status": "accepted",
                 "job_id": job_id,
                 "callback_url": callback_url,
+                "contract": build_contract_metadata('async_ack'),
                 "summary": response["summary"],
                 "integration_mode": integration_mode,
                 "crm_vendor": crm_vendor,
+                "callback_security": {
+                    "signed": bool(callback_signature_secret),
+                    "legacy_signature_header": WEBHOOK_SIGNATURE_HEADER if callback_signature_secret else None,
+                    "timestamp_header": WEBHOOK_TIMESTAMP_HEADER if callback_signature_secret else None,
+                    "timestamped_signature_header": WEBHOOK_SIGNATURE_V2_HEADER if callback_signature_secret else None,
+                },
             }
-            return jsonify(ack), 202
+            store_idempotent_response(idempotency_key, request_hash, ack, 202)
+            record_operational_event(
+                'webhook_processed',
+                status='accepted',
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                integration_mode=integration_mode,
+                crm_vendor=crm_vendor,
+                callback_url=callback_url,
+                email_count=len(emails),
+                response_status=202,
+                job_id=job_id,
+                event=response.get('event'),
+            )
+            start_callback_delivery(
+                callback_url,
+                response,
+                signature_secret=callback_signature_secret,
+                delivery_context={
+                    'source': 'webhook_validate',
+                    'job_id': job_id,
+                    'idempotency_key': idempotency_key,
+                },
+            )
+            return build_contract_response(ack, 202)
 
         # Default: return results synchronously
-        return jsonify(response), 200
+        store_idempotent_response(idempotency_key, request_hash, response, 200)
+        record_operational_event(
+            'webhook_processed',
+            status='completed',
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            integration_mode=integration_mode,
+            crm_vendor=crm_vendor,
+            callback_url=callback_url,
+            email_count=len(emails),
+            response_status=200,
+            job_id=job_id,
+            event=response.get('event'),
+        )
+        return build_contract_response(response, 200)
 
     except Exception as e:
         # Build error response in CRM format
@@ -2336,16 +2930,39 @@ def webhook_validate():
             "error": f"Webhook processing error: {str(e)}",
             "integration_mode": data.get('integration_mode', 'single_use') if data else 'single_use',
             "crm_vendor": data.get('crm_vendor', 'other') if data else 'other',
+            "contract": build_contract_metadata('error'),
+            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
+        store_idempotent_response(idempotency_key, request_hash, error_response, 500)
+        record_operational_event(
+            'webhook_processed',
+            status='failed',
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            integration_mode=data.get('integration_mode', 'single_use') if data else 'single_use',
+            crm_vendor=data.get('crm_vendor', 'other') if data else 'other',
+            callback_url=data.get('callback_url') if data else None,
+            response_status=500,
+            error=str(e),
+            event=error_event,
+        )
 
         # If callback_url was provided, try to notify about the failure
         if data and data.get('callback_url'):
             try:
-                start_callback_delivery(data['callback_url'], error_response)
+                start_callback_delivery(
+                    data['callback_url'],
+                    error_response,
+                    signature_secret=data.get('callback_signature_secret'),
+                    delivery_context={
+                        'source': 'webhook_validate',
+                        'idempotency_key': idempotency_key,
+                    },
+                )
             except:
                 pass  # Best effort
 
-        return jsonify(error_response), 500
+        return build_contract_response(error_response, 500)
 
 
 # ============================================================================
@@ -2392,15 +3009,20 @@ def send_crm_callback(callback_url: str, response_data: Dict[str, Any], settings
 
         # Create signature if secret is configured
         signature_secret = settings.get('callback_signature_secret')
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Content-Type': 'application/json',
+            INTEGRATION_CONTRACT_HEADER: INTEGRATION_CONTRACT_VERSION,
+        }
 
         if signature_secret:
-            signature = hmac.new(
-                signature_secret.encode(),
+            timestamp = str(int(time.time()))
+            headers[WEBHOOK_SIGNATURE_HEADER] = compute_webhook_signature(signature_secret, payload)
+            headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp
+            headers[WEBHOOK_SIGNATURE_V2_HEADER] = compute_webhook_signature(
+                signature_secret,
                 payload,
-                hashlib.sha256
-            ).hexdigest()
-            headers['X-Webhook-Signature'] = signature
+                timestamp=timestamp,
+            )
 
         # Send POST request
         req = urllib.request.Request(
@@ -2411,10 +3033,47 @@ def send_crm_callback(callback_url: str, response_data: Dict[str, Any], settings
         )
 
         with urllib.request.urlopen(req, timeout=10) as response:
-            print(f"[CALLBACK] Sent to {callback_url}, status: {response.status}")
+            record_operational_event(
+                'callback_delivery',
+                status='delivered',
+                callback_url=callback_url,
+                attempt=1,
+                status_code=response.status,
+                source='crm_callback',
+                job_id=response_data.get('job_id'),
+                event=response_data.get('event'),
+            )
+            logger.info("CRM callback delivered", extra={
+                'callback_url': callback_url,
+                'status_code': response.status,
+            })
 
     except Exception as e:
-        print(f"[ERROR] Callback delivery failed: {e}")
+        record_operational_event(
+            'callback_delivery',
+            status='failed',
+            callback_url=callback_url,
+            attempt=1,
+            error=str(e),
+            source='crm_callback',
+            job_id=response_data.get('job_id'),
+            event=response_data.get('event'),
+        )
+        logger.error("CRM callback delivery failed", extra={
+            'callback_url': callback_url,
+            'error': str(e),
+        })
+
+
+def start_crm_callback_delivery(callback_url: str, response_data: Dict[str, Any], settings: Dict[str, Any]) -> None:
+    """Queue CRM callback delivery so background validation is not blocked on I/O."""
+    dispatch_outbound_delivery(
+        send_crm_callback,
+        callback_url,
+        response_data,
+        settings,
+        job_name='crm_callback_delivery',
+    )
 
 
 # ============================================================================
@@ -2586,7 +3245,7 @@ def crm_upload_leads():
                     # Send callback if configured
                     callback_url = settings.get('callback_url')
                     if callback_url:
-                        send_crm_callback(callback_url, response, settings)
+                        start_crm_callback_delivery(callback_url, response, settings)
 
                 except Exception as e:
                     print(f"[ERROR] Auto-validation failed: {e}")
@@ -2752,7 +3411,7 @@ def crm_validate_leads(upload_id):
                 # Send callback if configured
                 callback_url = settings.get('callback_url')
                 if callback_url:
-                    send_crm_callback(callback_url, response, settings)
+                    start_crm_callback_delivery(callback_url, response, settings)
 
             except Exception as e:
                 print(f"[ERROR] Manual validation failed: {e}")

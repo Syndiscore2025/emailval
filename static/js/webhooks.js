@@ -2,6 +2,8 @@
  * Webhook Testing JavaScript
  */
 
+let currentWebhookLogs = [];
+
 document.addEventListener('DOMContentLoaded', () => {
     loadWebhookLogs();
 });
@@ -55,7 +57,8 @@ async function loadWebhookLogs() {
         const data = await response.json();
         
         if (data.success) {
-            renderWebhookLogs(data.logs);
+            renderWebhookSummary(data.summary || {});
+            renderWebhookLogs(data.logs || []);
         }
     } catch (error) {
         console.error('Error loading webhook logs:', error);
@@ -64,48 +67,59 @@ async function loadWebhookLogs() {
     }
 }
 
+function renderWebhookSummary(summary) {
+    document.getElementById('summary-total-events').textContent = summary.total_events ?? 0;
+    document.getElementById('summary-webhook-received').textContent = summary.webhook_received ?? 0;
+    document.getElementById('summary-callback-delivered').textContent = summary.callback_delivered ?? 0;
+    document.getElementById('summary-callback-success-rate').textContent =
+        summary.callback_success_rate == null ? '—' : `${summary.callback_success_rate}%`;
+    document.getElementById('summary-callback-failed-label').textContent =
+        `Failures: ${summary.callback_failed ?? 0}`;
+}
+
 /**
  * Render webhook logs
  */
 function renderWebhookLogs(logs) {
     const tbody = document.getElementById('webhook-logs-tbody');
+    currentWebhookLogs = Array.isArray(logs) ? logs : [];
     
-    if (!logs || logs.length === 0) {
+    if (currentWebhookLogs.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No webhook calls yet</td></tr>';
         return;
     }
     
-    tbody.innerHTML = logs.map(log => `
+    tbody.innerHTML = currentWebhookLogs.map((log, index) => `
         <tr>
             <td>${formatDate(log.timestamp)}</td>
-            <td><code>${log.endpoint}</code></td>
-            <td><span class="status-badge ${log.status >= 200 && log.status < 300 ? 'active' : 'inactive'}">${log.status}</span></td>
-            <td>${log.emails_processed || 0}</td>
-            <td>${log.response_time || 0}ms</td>
+            <td><code>${escapeHtml(log.event_type || 'unknown')}</code></td>
+            <td><span class="status-badge ${getStatusClass(log.status)}">${escapeHtml(log.status || 'unknown')}</span></td>
+            <td>${formatLocation(log)}</td>
+            <td>${formatReference(log)}</td>
             <td>
-                <button class="btn-primary-sm" onclick='showWebhookDetails(${JSON.stringify(log).replace(/'/g, "&apos;")})'>Details</button>
+                <button class="btn-primary-sm" onclick="showWebhookDetailsByIndex(${index})">Details</button>
             </td>
         </tr>
     `).join('');
 }
 
-/**
- * Show webhook details
- */
-function showWebhookDetails(log) {
+function showWebhookDetailsByIndex(index) {
+    const log = currentWebhookLogs[index];
+    if (!log) {
+        return;
+    }
+
     const content = document.getElementById('webhook-details-content');
     content.innerHTML = `
         <div class="detail-grid">
             <div class="detail-row"><strong>Timestamp:</strong><span>${formatDate(log.timestamp)}</span></div>
-            <div class="detail-row"><strong>Endpoint:</strong><span><code>${log.endpoint}</code></span></div>
-            <div class="detail-row"><strong>Status:</strong><span>${log.status}</span></div>
-            <div class="detail-row"><strong>Emails Processed:</strong><span>${log.emails_processed || 0}</span></div>
-            <div class="detail-row"><strong>Response Time:</strong><span>${log.response_time || 0}ms</span></div>
+            <div class="detail-row"><strong>Event:</strong><span><code>${escapeHtml(log.event_type || 'unknown')}</code></span></div>
+            <div class="detail-row"><strong>Status:</strong><span>${escapeHtml(log.status || 'unknown')}</span></div>
+            <div class="detail-row"><strong>Source:</strong><span>${escapeHtml(log.source || log.integration_mode || log.crm_vendor || '—')}</span></div>
+            <div class="detail-row"><strong>Job ID:</strong><span>${escapeHtml(log.job_id || '—')}</span></div>
         </div>
-        <h3>Request Payload</h3>
-        <pre>${JSON.stringify(log.request_payload || {}, null, 2)}</pre>
-        <h3>Response</h3>
-        <pre>${JSON.stringify(log.response_data || {}, null, 2)}</pre>
+        <h3>Event Record</h3>
+        <pre>${escapeHtml(JSON.stringify(log, null, 2))}</pre>
     `;
     document.getElementById('webhook-details-modal').style.display = 'flex';
 }
@@ -124,5 +138,40 @@ function formatDate(dateStr) {
     if (!dateStr) return 'N/A';
     const date = new Date(dateStr);
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+}
+
+function getStatusClass(status) {
+    if (['completed', 'accepted', 'delivered', 'replayed'].includes(status)) {
+        return 'active';
+    }
+    if (['failed', 'rejected'].includes(status)) {
+        return 'inactive';
+    }
+    return 'pending';
+}
+
+function formatLocation(log) {
+    const value = log.callback_url || log.source || log.integration_mode || log.crm_vendor || '—';
+    return escapeHtml(value);
+}
+
+function formatReference(log) {
+    const parts = [];
+    if (log.job_id) {
+        parts.push(`job: ${escapeHtml(log.job_id)}`);
+    }
+    if (log.idempotency_key) {
+        parts.push(`key: ${escapeHtml(log.idempotency_key)}`);
+    }
+    return parts.length ? parts.join('<br>') : '—';
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 

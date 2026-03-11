@@ -54,6 +54,29 @@
                 <pre id="response-body"></pre>
             </div>
         </div>
+
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <h3>Total Events</h3>
+                <div class="kpi-value" id="summary-total-events">-</div>
+                <div class="kpi-label">Persisted webhook and callback events</div>
+            </div>
+            <div class="kpi-card">
+                <h3>Webhook Requests</h3>
+                <div class="kpi-value" id="summary-webhook-received">-</div>
+                <div class="kpi-label">Inbound webhook requests received</div>
+            </div>
+            <div class="kpi-card">
+                <h3>Callbacks Delivered</h3>
+                <div class="kpi-value" id="summary-callback-delivered">-</div>
+                <div class="kpi-label">Successful callback deliveries</div>
+            </div>
+            <div class="kpi-card">
+                <h3>Callback Success Rate</h3>
+                <div class="kpi-value" id="summary-callback-success-rate">-</div>
+                <div class="kpi-label" id="summary-callback-failed-label">Failures: -</div>
+            </div>
+        </div>
         
         <div class="webhook-logs">
             <h2>Recent Webhook Calls</h2>
@@ -61,10 +84,10 @@
                 <thead>
                     <tr>
                         <th>Timestamp</th>
-                        <th>Endpoint</th>
+                        <th>Event</th>
                         <th>Status</th>
-                        <th>Emails Processed</th>
-                        <th>Response Time</th>
+                        <th>Source / Target</th>
+                        <th>Reference</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
