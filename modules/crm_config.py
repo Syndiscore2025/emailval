@@ -17,6 +17,11 @@ from cryptography.fernet import Fernet
 import base64
 
 from modules.json_store import json_file_lock, load_json_data, save_json_data_atomic
+from modules.runtime_state_backend import (
+    get_runtime_state_table_name,
+    postgres_transaction,
+    use_postgres_runtime_state,
+)
 
 
 # Configuration file path
@@ -68,45 +73,119 @@ def decrypt_value(encrypted_value: str) -> str:
 
 class CRMConfigManager:
     """Manages CRM client configurations"""
-    
+
     def __init__(self, config_file: str = CRM_CONFIG_FILE):
         self.config_file = config_file
         self.lock = Lock()
+        self.postgres_table = get_runtime_state_table_name('crm_configs')
+        self._postgres_table_ready = False
         self.configs = self._load_configs()
+
+    def _use_postgres(self) -> bool:
+        return use_postgres_runtime_state()
 
     def _empty_configs(self) -> Dict[str, Any]:
         return {}
-    
+
+    # ------------------------------------------------------------------
+    # Postgres helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_postgres_table(self, cursor) -> None:
+        if self._postgres_table_ready:
+            return
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {self.postgres_table} (
+                crm_id TEXT PRIMARY KEY,
+                config_data TEXT NOT NULL
+            )
+            """
+        )
+        self._postgres_table_ready = True
+
+    def _postgres_fetch_config(self, cursor, crm_id: str) -> Optional[Dict[str, Any]]:
+        cursor.execute(
+            f"SELECT config_data FROM {self.postgres_table} WHERE crm_id = %s",
+            (crm_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            raw = row[0]
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode('utf-8')
+            data = json.loads(raw) if raw else None
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def _postgres_save_config(self, cursor, crm_id: str, config: Dict[str, Any]) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO {self.postgres_table} (crm_id, config_data)
+            VALUES (%s, %s)
+            ON CONFLICT (crm_id) DO UPDATE
+            SET config_data = EXCLUDED.config_data
+            """,
+            (crm_id, json.dumps(config)),
+        )
+
+    def _postgres_delete_config(self, cursor, crm_id: str) -> None:
+        cursor.execute(
+            f"DELETE FROM {self.postgres_table} WHERE crm_id = %s",
+            (crm_id,),
+        )
+
+    # ------------------------------------------------------------------
+    # JSON helpers
+    # ------------------------------------------------------------------
+
     def _load_configs(self) -> Dict[str, Any]:
-        """Load CRM configurations from file"""
+        """Load CRM configurations from file (no-op for Postgres path)"""
+        if self._use_postgres():
+            return {}
         data = load_json_data(self.config_file, self._empty_configs())
         return data if isinstance(data, dict) else self._empty_configs()
 
     def _refresh_from_disk(self):
         self.configs = self._load_configs()
-    
+
     def _save_configs(self):
         """Save CRM configurations to file"""
         save_json_data_atomic(self.config_file, self.configs)
     
+    def _decrypt_config_for_return(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Decrypt AWS credentials in a config copy before returning."""
+        config = deepcopy(config)
+        if 's3_delivery' in config.get('settings', {}):
+            s3_config = config['settings']['s3_delivery']
+            if 'secret_access_key_encrypted' in s3_config:
+                s3_config['secret_access_key'] = decrypt_value(
+                    s3_config['secret_access_key_encrypted']
+                )
+        return config
+
     def get_config(self, crm_id: str) -> Optional[Dict[str, Any]]:
         """Get configuration for a specific CRM client"""
+        if self._use_postgres():
+            with self.lock:
+                with postgres_transaction() as conn:
+                    with conn.cursor() as cursor:
+                        self._ensure_postgres_table(cursor)
+                        config = self._postgres_fetch_config(cursor, crm_id)
+            if not config:
+                return None
+            return self._decrypt_config_for_return(config)
+
         with self.lock:
             self._refresh_from_disk()
             config = deepcopy(self.configs.get(crm_id))
             if not config:
                 return None
+            return self._decrypt_config_for_return(config)
 
-            # Decrypt AWS credentials before returning without mutating stored state.
-            if 's3_delivery' in config.get('settings', {}):
-                s3_config = config['settings']['s3_delivery']
-                if 'secret_access_key_encrypted' in s3_config:
-                    s3_config['secret_access_key'] = decrypt_value(
-                        s3_config['secret_access_key_encrypted']
-                    )
-
-            return config
-    
     def create_config(self, crm_id: str, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create new CRM configuration"""
         config_data = deepcopy(config_data)
@@ -118,21 +197,29 @@ class CRMConfigManager:
                 s3_config['secret_access_key_encrypted'] = encrypt_value(
                     s3_config['secret_access_key']
                 )
-                # Remove plain text secret
                 del s3_config['secret_access_key']
-        
+
+        config = {
+            'crm_id': crm_id,
+            'crm_vendor': config_data.get('crm_vendor', 'other'),
+            'api_key': config_data.get('api_key'),
+            'settings': config_data.get('settings', self._get_default_settings()),
+            'premium_features': config_data.get('premium_features', self._get_default_premium_features()),
+            'created_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }
+
+        if self._use_postgres():
+            with self.lock:
+                with postgres_transaction() as conn:
+                    with conn.cursor() as cursor:
+                        self._ensure_postgres_table(cursor)
+                        self._postgres_save_config(cursor, crm_id, config)
+            return self.get_config(crm_id)
+
         with self.lock:
             with json_file_lock(self.config_file):
                 self._refresh_from_disk()
-                config = {
-                    'crm_id': crm_id,
-                    'crm_vendor': config_data.get('crm_vendor', 'other'),
-                    'api_key': config_data.get('api_key'),
-                    'settings': config_data.get('settings', self._get_default_settings()),
-                    'premium_features': config_data.get('premium_features', self._get_default_premium_features()),
-                    'created_at': datetime.now().isoformat(),
-                    'updated_at': datetime.now().isoformat()
-                }
                 self.configs[crm_id] = config
                 self._save_configs()
 
@@ -151,13 +238,28 @@ class CRMConfigManager:
                 )
                 del s3_config['secret_access_key']
 
+        if self._use_postgres():
+            with self.lock:
+                with postgres_transaction() as conn:
+                    with conn.cursor() as cursor:
+                        self._ensure_postgres_table(cursor)
+                        config = self._postgres_fetch_config(cursor, crm_id)
+                        if config is None:
+                            return None
+                        if 'settings' in updates:
+                            config['settings'].update(updates['settings'])
+                        if 'premium_features' in updates:
+                            config['premium_features'].update(updates['premium_features'])
+                        config['updated_at'] = datetime.now().isoformat()
+                        self._postgres_save_config(cursor, crm_id, config)
+            return self.get_config(crm_id)
+
         with self.lock:
             with json_file_lock(self.config_file):
                 self._refresh_from_disk()
                 if crm_id not in self.configs:
                     return None
 
-                # Merge updates
                 config = self.configs[crm_id]
                 if 'settings' in updates:
                     config['settings'].update(updates['settings'])
@@ -165,13 +267,23 @@ class CRMConfigManager:
                     config['premium_features'].update(updates['premium_features'])
 
                 config['updated_at'] = datetime.now().isoformat()
-
                 self._save_configs()
 
         return self.get_config(crm_id)
 
     def delete_config(self, crm_id: str) -> bool:
         """Delete CRM configuration"""
+        if self._use_postgres():
+            with self.lock:
+                with postgres_transaction() as conn:
+                    with conn.cursor() as cursor:
+                        self._ensure_postgres_table(cursor)
+                        existing = self._postgres_fetch_config(cursor, crm_id)
+                        if existing is None:
+                            return False
+                        self._postgres_delete_config(cursor, crm_id)
+            return True
+
         with self.lock:
             with json_file_lock(self.config_file):
                 self._refresh_from_disk()

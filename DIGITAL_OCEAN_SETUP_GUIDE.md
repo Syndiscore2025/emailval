@@ -2,7 +2,7 @@
 
 ## Goal
 
-Move `emailval` from Render to a single DigitalOcean Droplet without breaking the existing Switchbox-style integration flow where you ship the feature and Switchbox integrates with your API.
+Deploy `emailval` to DigitalOcean (App Platform or Droplet) for production use with Switchbox. All runtime state (`APIKeyManager`, `JobTracker`, `EmailTracker`, `LeadManager`, `WebhookLogManager`, `CRMConfigManager`) is now Postgres-backed via `RUNTIME_STATE_BACKEND=postgres`, so the app is multi-worker and redeploy-safe.
 
 ## Current recovery status from Render
 
@@ -53,15 +53,24 @@ If Switchbox simply calls your API and handles its own CRM integration on their 
 
 ## Recommended target architecture
 
-Use one Ubuntu Droplet first:
+### Option A — DigitalOcean App Platform (recommended)
+
+- managed platform, zero server maintenance
+- set env vars in the DO dashboard
+- attach a **Managed Postgres** database cluster (DO provides this)
+- set `RUNTIME_STATE_BACKEND=postgres` and `RUNTIME_STATE_DATABASE_URL` to the cluster URL
+- scale to multiple instances safely — all state lives in Postgres
+
+### Option B — Ubuntu Droplet (self-managed)
 
 - app server: `gunicorn`
 - reverse proxy: `nginx`
 - process manager: `systemd`
 - TLS: `Let's Encrypt`
-- persistent state: local Droplet disk
+- persistent state: external Postgres (DO Managed Postgres, or self-hosted)
+- set `RUNTIME_STATE_BACKEND=postgres` + `RUNTIME_STATE_DATABASE_URL`
 
-Do not start with multiple app instances while app state is still JSON-backed.
+With `RUNTIME_STATE_BACKEND=postgres` set, the app **automatically creates its tables on first start**. No manual schema migrations are needed.
 
 ## Planned host layout
 
@@ -171,39 +180,122 @@ Use `deploy/digitalocean/emailval.env.example` as the base and create:
 
 - `/etc/emailval/emailval.env`
 
-### Minimum recommended env vars for your Switchbox-style API deployment
+### Complete environment variable reference
+
+All variables you need to set. Required = must be set before first boot. Optional = only set if you use that feature.
+
+#### Core app (required)
+
+| Variable | Example / Default | Notes |
+|---|---|---|
+| `FLASK_ENV` | `production` | Disables debug mode |
+| `ENVIRONMENT` | `production` | Internal env flag |
+| `SECRET_KEY` | `<64-char random string>` | Flask session secret — keep private |
+| `ADMIN_USERNAME` | `admin` | Admin UI login |
+| `ADMIN_PASSWORD` | `<strong password>` | Admin UI password |
+| `API_AUTH_ENABLED` | `true` | Always `true` in production |
+| `API_KEY_ALLOW_QUERY_PARAM` | `false` | Force header-only API key delivery |
+
+#### Postgres runtime state (required for multi-worker / App Platform)
+
+| Variable | Example / Default | Notes |
+|---|---|---|
+| `RUNTIME_STATE_BACKEND` | `postgres` | Set to `postgres` to enable; default is `json` |
+| `RUNTIME_STATE_DATABASE_URL` | `postgresql://user:pass@host:5432/db` | Full Postgres connection URL |
+| `RUNTIME_STATE_TABLE_PREFIX` | `emailval_` | Optional prefix for all auto-created tables |
+
+When `RUNTIME_STATE_BACKEND=postgres` is set, the following tables are auto-created on first start:
+- `emailval_api_keys`
+- `emailval_jobs`
+- `emailval_email_tracker`
+- `emailval_crm_uploads`
+- `emailval_webhook_logs`
+- `emailval_crm_configs`
+
+You can also set `DATABASE_URL` as a fallback if `RUNTIME_STATE_DATABASE_URL` is not set (DO Managed Postgres sets this automatically on App Platform).
+
+#### Workers and performance (optional)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SMTP_ENABLED` | `false` | Enable live SMTP MX checks |
+| `SMTP_MAX_WORKERS` | `20` | Concurrent SMTP check workers |
+| `OUTBOUND_DELIVERY_WORKERS` | `1` | Callback/KPI delivery threads |
+| `OUTBOUND_DELIVERY_QUEUE_SIZE` | `500` | Max queued delivery tasks |
+| `GUNICORN_BIND` | `127.0.0.1:8000` | Droplet only (App Platform ignores) |
+| `GUNICORN_WORKERS` | `2` | Gunicorn worker processes |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_FORMAT` | `json` | `json` or `text` |
+
+#### CRM config encryption (required if using S3 delivery)
+
+| Variable | Notes |
+|---|---|
+| `CRM_CONFIG_ENCRYPTION_KEY` | Fernet key for encrypting AWS credentials in CRM configs. Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+
+#### Webhook security (optional — enable when Switchbox is ready)
+
+| Variable | Example | Notes |
+|---|---|---|
+| `WEBHOOK_SIGNING_SECRET` | `<long random string>` | HMAC signing key for webhook callbacks |
+| `REQUIRE_WEBHOOK_SIGNATURES` | `true` | Reject unsigned inbound webhooks |
+| `REQUIRE_WEBHOOK_TIMESTAMP` | `true` | Reject stale timestamps |
+| `WEBHOOK_MAX_SIGNATURE_AGE_SECONDS` | `300` | Max timestamp drift window |
+
+#### External KPI / Switchbox event delivery (optional)
+
+| Variable | Example | Notes |
+|---|---|---|
+| `EXTERNAL_KPI_ENABLED` | `true` | Send KPI events to Switchbox command center |
+| `EXTERNAL_KPI_EVENT_URL` | `https://command-center.switchbox.com/api/v1/events` | Switchbox event endpoint |
+| `EXTERNAL_KPI_API_KEY` | `<switchbox-api-key>` | API key Switchbox provides |
+| `EXTERNAL_KPI_AUTH_HEADER` | `X-Switchbox-Key` | Header name for the API key |
+| `EXTERNAL_KPI_APP_SLUG` | `email-validator` | App identifier for event payloads |
+
+#### Observability (optional)
+
+| Variable | Example | Notes |
+|---|---|---|
+| `SENTRY_DSN` | `https://...@sentry.io/...` | Sentry error tracking DSN |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Trace sampling rate (0.0–1.0) |
+
+---
+
+### Minimum env file for App Platform + Postgres
 
 ```bash
 FLASK_ENV=production
 ENVIRONMENT=production
-SECRET_KEY=replace-with-long-random-secret
+SECRET_KEY=replace-with-64-char-random-string
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace-with-strong-password
 API_AUTH_ENABLED=true
 API_KEY_ALLOW_QUERY_PARAM=false
+RUNTIME_STATE_BACKEND=postgres
+# RUNTIME_STATE_DATABASE_URL is auto-set by DO Managed Postgres attachment
+# Add manually if using external Postgres:
+# RUNTIME_STATE_DATABASE_URL=postgresql://user:pass@host:5432/dbname
+CRM_CONFIG_ENCRYPTION_KEY=generate-with-fernet
 SMTP_ENABLED=false
-SMTP_MAX_WORKERS=20
-OUTBOUND_DELIVERY_WORKERS=1
-OUTBOUND_DELIVERY_QUEUE_SIZE=500
 LOG_LEVEL=INFO
 LOG_FORMAT=json
-GUNICORN_BIND=127.0.0.1:8000
-GUNICORN_WORKERS=2
 ```
 
-Exact command to create the env file on the Droplet:
+### Minimum env file for a Droplet
 
 ```bash
 sudo tee /etc/emailval/emailval.env > /dev/null <<'EOF'
 FLASK_ENV=production
 ENVIRONMENT=production
-SECRET_KEY=replace-with-long-random-secret
+SECRET_KEY=replace-with-64-char-random-string
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace-with-strong-password
 API_AUTH_ENABLED=true
 API_KEY_ALLOW_QUERY_PARAM=false
+RUNTIME_STATE_BACKEND=postgres
+RUNTIME_STATE_DATABASE_URL=postgresql://emailval:password@localhost:5432/emailval
+CRM_CONFIG_ENCRYPTION_KEY=replace-with-fernet-key
 SMTP_ENABLED=false
-SMTP_MAX_WORKERS=20
 OUTBOUND_DELIVERY_WORKERS=1
 OUTBOUND_DELIVERY_QUEUE_SIZE=500
 LOG_LEVEL=INFO
@@ -214,29 +306,12 @@ EOF
 sudo chmod 600 /etc/emailval/emailval.env
 ```
 
-### Only set these if you actually use them
-
-```bash
-WEBHOOK_SIGNING_SECRET=replace-with-long-random-secret
-REQUIRE_WEBHOOK_SIGNATURES=true
-REQUIRE_WEBHOOK_TIMESTAMP=true
-WEBHOOK_MAX_SIGNATURE_AGE_SECONDS=300
-CRM_CONFIG_ENCRYPTION_KEY=required-only-if-restoring-stored-crm-configs
-EXTERNAL_KPI_ENABLED=false
-EXTERNAL_KPI_EVENT_URL=
-EXTERNAL_KPI_API_KEY=
-EXTERNAL_KPI_AUTH_HEADER=X-Switchbox-Key
-EXTERNAL_KPI_APP_SLUG=email-validator
-SENTRY_DSN=
-SENTRY_TRACES_SAMPLE_RATE=0.1
-```
-
-Important:
-
-- keep `API_AUTH_ENABLED=true`
-- keep `API_KEY_ALLOW_QUERY_PARAM=false`
-- only set `CRM_CONFIG_ENCRYPTION_KEY` if restoring stored encrypted CRM configs
-- if you enable webhook signature enforcement, make sure Switchbox sends the expected signature headers
+Important rules:
+- Always keep `API_AUTH_ENABLED=true`
+- Always keep `API_KEY_ALLOW_QUERY_PARAM=false`
+- Always set `RUNTIME_STATE_BACKEND=postgres` on App Platform (ephemeral filesystem)
+- Generate `CRM_CONFIG_ENCRYPTION_KEY` once and **never rotate it** without re-encrypting stored configs
+- If you enable webhook signature enforcement, coordinate with Switchbox to ensure they send `X-Webhook-Signature` headers
 
 ## Step 8: Install systemd service
 

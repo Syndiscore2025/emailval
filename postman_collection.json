@@ -1,0 +1,367 @@
+{
+  "info": {
+    "name": "EmailVal API — Switchbox Integration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Full API collection for the emailval Email Validation service. Set the {{base_url}} and {{api_key}} collection variables before running."
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://your-domain.com", "type": "string" },
+    { "key": "api_key", "value": "your-api-key-here", "type": "string" },
+    { "key": "admin_token", "value": "your-admin-api-token", "type": "string" },
+    { "key": "crm_id", "value": "switchbox_prod", "type": "string" },
+    { "key": "upload_id", "value": "", "type": "string" },
+    { "key": "job_id", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health & Readiness",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          }
+        },
+        {
+          "name": "GET /ready",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/ready"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — API Key Management",
+      "item": [
+        {
+          "name": "List API Keys",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
+            "url": "{{base_url}}/admin/api/keys"
+          }
+        },
+        {
+          "name": "Create API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Admin-Token", "value": "{{admin_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Switchbox Production\",\n  \"rate_limit\": 1000\n}"
+            },
+            "url": "{{base_url}}/admin/api/keys"
+          }
+        },
+        {
+          "name": "Revoke API Key",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
+            "url": "{{base_url}}/admin/api/keys/KEY_ID_HERE"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Single Email Validation",
+      "item": [
+        {
+          "name": "POST /validate — valid email",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice@example.com\"\n}"
+            },
+            "url": "{{base_url}}/validate"
+          }
+        },
+        {
+          "name": "POST /validate — invalid email",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"notanemail@\"\n}"
+            },
+            "url": "{{base_url}}/validate"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CRM Configuration",
+      "item": [
+        {
+          "name": "POST /api/crm/config — Create config",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"settings\": {\n    \"auto_validate\": false,\n    \"enable_smtp\": true,\n    \"enable_catchall\": true,\n    \"include_catchall_in_clean\": false,\n    \"include_role_based_in_clean\": false,\n    \"callback_url\": \"https://your-switchbox-callback.com/webhook\",\n    \"callback_signature_secret\": \"your-shared-hmac-secret\"\n  },\n  \"premium_features\": {\n    \"smtp_verification\": true,\n    \"catchall_detection\": true,\n    \"s3_delivery\": false\n  }\n}"
+            },
+            "url": "{{base_url}}/api/crm/config"
+          }
+        },
+        {
+          "name": "GET /api/crm/config/:crm_id",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/crm/config/{{crm_id}}"
+          }
+        },
+        {
+          "name": "PUT /api/crm/config/:crm_id — Update settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"settings\": {\n    \"auto_validate\": true,\n    \"callback_url\": \"https://your-switchbox-callback.com/webhook/v2\"\n  }\n}"
+            },
+            "url": "{{base_url}}/api/crm/config/{{crm_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "CRM Lead Upload & Validation",
+      "item": [
+        {
+          "name": "POST /api/crm/leads/upload — Auto mode",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.upload_id) { pm.collectionVariables.set('upload_id', json.upload_id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"validation_mode\": \"auto\",\n  \"emails\": [\"alice@example.com\", \"bad-email@\", \"bob@gmail.com\"],\n  \"crm_context\": [\n    { \"record_id\": \"rec_001\", \"email\": \"alice@example.com\", \"name\": \"Alice\" },\n    { \"record_id\": \"rec_002\", \"email\": \"bad-email@\", \"name\": \"Bad\" },\n    { \"record_id\": \"rec_003\", \"email\": \"bob@gmail.com\", \"name\": \"Bob\" }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/crm/leads/upload"
+          }
+        },
+        {
+          "name": "POST /api/crm/leads/upload — Manual mode",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.upload_id) { pm.collectionVariables.set('upload_id', json.upload_id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"validation_mode\": \"manual\",\n  \"emails\": [\"test@example.com\"],\n  \"crm_context\": [\n    { \"record_id\": \"rec_manual_1\", \"email\": \"test@example.com\", \"name\": \"Test\" }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/crm/leads/upload"
+          }
+        },
+        {
+          "name": "POST /api/crm/leads/:upload_id/validate — Trigger manual",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/crm/leads/{{upload_id}}/validate"
+          }
+        },
+        {
+          "name": "GET /api/crm/leads/:upload_id/status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/crm/leads/{{upload_id}}/status"
+          }
+        },
+        {
+          "name": "GET /api/crm/leads/:upload_id/results",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/crm/leads/{{upload_id}}/results"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook — Inbound Validation",
+      "item": [
+        {
+          "name": "POST /api/webhook/validate — with callback",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.job_id) { pm.collectionVariables.set('job_id', json.job_id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "X-Idempotency-Key", "value": "unique-request-id-001" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emails\": [\"alice@example.com\", \"bob@example.com\"],\n  \"crm_id\": \"{{crm_id}}\",\n  \"callback_url\": \"https://your-switchbox-callback.com/webhook\"\n}"
+            },
+            "url": "{{base_url}}/api/webhook/validate"
+          }
+        },
+        {
+          "name": "POST /api/webhook/validate — no callback (sync)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emails\": [\"test@example.com\"],\n  \"crm_id\": \"{{crm_id}}\"\n}"
+            },
+            "url": "{{base_url}}/api/webhook/validate"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Job Status",
+      "item": [
+        {
+          "name": "GET /api/jobs/:job_id",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/jobs/{{job_id}}"
+          }
+        },
+        {
+          "name": "GET /api/jobs/:job_id/stream (SSE)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "text/event-stream" }
+            ],
+            "url": "{{base_url}}/api/jobs/{{job_id}}/stream"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tracker & Analytics",
+      "item": [
+        {
+          "name": "GET /tracker/stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/tracker/stats"
+          }
+        },
+        {
+          "name": "GET /tracker/export",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/tracker/export"
+          }
+        },
+        {
+          "name": "GET /api/integrations/kpi-summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/integrations/kpi-summary"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Export",
+      "item": [
+        {
+          "name": "POST /api/export/csv",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emails\": [\"alice@example.com\", \"bob@example.com\"],\n  \"results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true },\n    { \"email\": \"bob@example.com\", \"valid\": false }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/export/csv"
+          }
+        },
+        {
+          "name": "POST /api/export/excel",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emails\": [\"alice@example.com\"],\n  \"results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/export/excel"
+          }
+        }
+      ]
+    }
+  ]
+}
+

@@ -10,6 +10,11 @@ from typing import Dict, Any, Optional
 from threading import Lock
 
 from modules.json_store import json_file_lock, load_json_data, save_json_data_atomic
+from modules.runtime_state_backend import (
+    get_runtime_state_table_name,
+    postgres_transaction,
+    use_postgres_runtime_state,
+)
 
 class JobTracker:
     """Track validation job progress"""
@@ -17,12 +22,92 @@ class JobTracker:
     def __init__(self, data_file: str = "data/validation_jobs.json"):
         self.data_file = data_file
         self.lock = Lock()
-        self.jobs = self._load_jobs()
+        self.backend = 'postgres' if use_postgres_runtime_state() else 'json'
+        self.postgres_table = get_runtime_state_table_name('validation_jobs')
+        self._postgres_table_ready = False
+        self.jobs = {}
+        if self._use_postgres():
+            self._ensure_postgres_table()
+        else:
+            self.jobs = self._load_jobs()
+
+    def _use_postgres(self) -> bool:
+        return self.backend == 'postgres'
     
     def _load_jobs(self) -> Dict[str, Any]:
         """Load jobs from disk"""
         data = load_json_data(self.data_file, {})
         return data if isinstance(data, dict) else {}
+
+    def _ensure_postgres_table(self) -> None:
+        if not self._use_postgres() or self._postgres_table_ready:
+            return
+
+        with postgres_transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.postgres_table} (
+                        job_id TEXT PRIMARY KEY,
+                        job_data TEXT NOT NULL
+                    )
+                    """
+                )
+
+        self._postgres_table_ready = True
+
+    def _deserialize_job_data(self, raw_value: Any) -> Dict[str, Any]:
+        if isinstance(raw_value, dict):
+            return dict(raw_value)
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode('utf-8')
+        if not raw_value:
+            return {}
+        data = json.loads(raw_value)
+        return data if isinstance(data, dict) else {}
+
+    def _postgres_fetch_job(self, cursor, job_id: str, for_update: bool = False) -> Optional[Dict[str, Any]]:
+        query = f"SELECT job_data FROM {self.postgres_table} WHERE job_id = %s"
+        if for_update:
+            query += ' FOR UPDATE'
+
+        cursor.execute(query, (job_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return self._deserialize_job_data(row[0])
+
+    def _postgres_save_job(self, cursor, job_id: str, job_data: Dict[str, Any]) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO {self.postgres_table} (job_id, job_data)
+            VALUES (%s, %s)
+            ON CONFLICT (job_id) DO UPDATE
+            SET job_data = EXCLUDED.job_data
+            """,
+            (job_id, json.dumps(job_data)),
+        )
+
+    def _build_job_payload(self, job_id: str, total_emails: int,
+                           session_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return {
+            "job_id": job_id,
+            "status": "pending",  # pending, running, completed, failed
+            "total_emails": total_emails,
+            "validated_count": 0,
+            "valid_count": 0,
+            "invalid_count": 0,
+            "disposable_count": 0,
+            "role_based_count": 0,
+            "personal_count": 0,
+            "catchall_count": 0,
+            "started_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "session_info": session_info or {},
+            "webhook_url": None,
+            "error": None,
+            "success": None,
+        }
 
     def _refresh_from_disk(self):
         """Refresh in-memory jobs from disk.
@@ -30,6 +115,8 @@ class JobTracker:
         This makes job tracking safe across multiple Gunicorn workers by
         ensuring each process sees the latest job state written by others.
         """
+        if self._use_postgres():
+            return
         if os.path.exists(self.data_file):
             try:
                 self.jobs = self._load_jobs()
@@ -40,36 +127,39 @@ class JobTracker:
 
     def _save_jobs(self):
         """Save jobs to disk"""
+        if self._use_postgres():
+            return
         save_json_data_atomic(self.data_file, self.jobs)
 
-    def create_job(self, total_emails: int, session_info: Dict[str, Any] = None) -> str:
-        """Create a new validation job"""
-        job_id = str(uuid.uuid4())[:8]
+    def create_job(self, total_emails: int, session_info: Dict[str, Any] = None,
+                   job_id: Optional[str] = None) -> str:
+        """Create a new validation job.
+
+        Args:
+            total_emails: Number of emails to validate.
+            session_info: Optional metadata about the session.
+            job_id: Optional explicit job ID. When provided (e.g. by CRM flows
+                    that generate their own ``job_<hex>`` IDs), the caller's
+                    value is used instead of a randomly generated one.
+        """
+        if job_id is None:
+            job_id = str(uuid.uuid4())[:8]
+        job_payload = self._build_job_payload(job_id, total_emails, session_info)
 
         with self.lock:
-            with json_file_lock(self.data_file):
-                # Always refresh first so we don't overwrite jobs created by other
-                # workers/processes.
-                self._refresh_from_disk()
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        self._postgres_save_job(cursor, job_id, job_payload)
+            else:
+                with json_file_lock(self.data_file):
+                    # Always refresh first so we don't overwrite jobs created by other
+                    # workers/processes.
+                    self._refresh_from_disk()
 
-                self.jobs[job_id] = {
-                    "job_id": job_id,
-                    "status": "pending",  # pending, running, completed, failed
-                    "total_emails": total_emails,
-                    "validated_count": 0,
-                    "valid_count": 0,
-                    "invalid_count": 0,
-                    "disposable_count": 0,
-                    "role_based_count": 0,
-                    "personal_count": 0,
-                    "catchall_count": 0,
-                    "started_at": datetime.now().isoformat(),
-                    "completed_at": None,
-                    "session_info": session_info or {},
-                    "webhook_url": None,
-                    "error": None
-                }
-                self._save_jobs()
+                    self.jobs[job_id] = job_payload
+                    self._save_jobs()
 
         return job_id
 
@@ -77,6 +167,31 @@ class JobTracker:
                          disposable_count: int = None, role_based_count: int = None, personal_count: int = None, catchall_count: int = None):
         """Update job progress with detailed stats"""
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        job = self._postgres_fetch_job(cursor, job_id, for_update=True)
+                        if job is None:
+                            return
+                        job["validated_count"] = validated_count
+                        if valid_count is not None:
+                            job["valid_count"] = valid_count
+                        if invalid_count is not None:
+                            job["invalid_count"] = invalid_count
+                        if disposable_count is not None:
+                            job["disposable_count"] = disposable_count
+                        if role_based_count is not None:
+                            job["role_based_count"] = role_based_count
+                        if personal_count is not None:
+                            job["personal_count"] = personal_count
+                        if catchall_count is not None:
+                            job["catchall_count"] = catchall_count
+                        if job.get("status") == "pending":
+                            job["status"] = "running"
+                        self._postgres_save_job(cursor, job_id, job)
+                return
+
             with json_file_lock(self.data_file):
                 # Refresh to merge with any updates written by other workers.
                 self._refresh_from_disk()
@@ -102,6 +217,21 @@ class JobTracker:
     def complete_job(self, job_id: str, success: bool = True, error: str = None):
         """Mark job as completed"""
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        job = self._postgres_fetch_job(cursor, job_id, for_update=True)
+                        if job is None:
+                            return
+                        job["status"] = "completed" if success else "failed"
+                        job["success"] = success
+                        job["completed_at"] = datetime.now().isoformat()
+                        if error:
+                            job["error"] = error
+                        self._postgres_save_job(cursor, job_id, job)
+                return
+
             with json_file_lock(self.data_file):
                 # Refresh first so we don't clobber progress updates from another
                 # worker.
@@ -109,6 +239,7 @@ class JobTracker:
 
                 if job_id in self.jobs:
                     self.jobs[job_id]["status"] = "completed" if success else "failed"
+                    self.jobs[job_id]["success"] = success
                     self.jobs[job_id]["completed_at"] = datetime.now().isoformat()
                     if error:
                         self.jobs[job_id]["error"] = error
@@ -117,6 +248,12 @@ class JobTracker:
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status"""
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        return self._postgres_fetch_job(cursor, job_id)
+
             # Always read fresh state from disk so /api/jobs and SSE streaming see
             # the latest progress regardless of which Gunicorn worker handles the
             # request.
@@ -126,6 +263,17 @@ class JobTracker:
     def set_webhook(self, job_id: str, webhook_url: str):
         """Set webhook URL for job completion notification"""
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        job = self._postgres_fetch_job(cursor, job_id, for_update=True)
+                        if job is None:
+                            return
+                        job["webhook_url"] = webhook_url
+                        self._postgres_save_job(cursor, job_id, job)
+                return
+
             with json_file_lock(self.data_file):
                 self._refresh_from_disk()
                 if job_id in self.jobs:

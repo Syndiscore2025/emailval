@@ -1424,6 +1424,7 @@ def admin_reverify_emails():
             return jsonify({"success": False, "error": "No emails provided"}), 400
 
         tracker = get_tracker()
+        tracker.data = tracker._load_database()
         results = []
 
         for raw_email in emails:
@@ -1441,6 +1442,7 @@ def admin_reverify_emails():
                 record["valid"] = False
                 record["is_disposable"] = True
                 tracker.data.setdefault("emails", {})[email] = record
+                tracker._save_database()
                 results.append({"email": email, "status": "disposable", "reason": record["delete_reason"]})
                 continue
 
@@ -1493,6 +1495,7 @@ def admin_delete_emails():
             return jsonify({"success": False, "error": "No emails provided"}), 400
 
         tracker = get_tracker()
+        tracker.data = tracker._load_database()
         deleted = []
 
         for raw_email in emails:
@@ -1604,6 +1607,7 @@ def export_database():
     """Export database as JSON"""
     try:
         tracker = get_tracker()
+        tracker.data = tracker._load_database()
         return jsonify(tracker.data)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1725,6 +1729,7 @@ def get_logs():
         # In a real app, load from log file or database
         # For now, return sample data from tracker sessions
         tracker = get_tracker()
+        tracker.data = tracker._load_database()
         logs = []
 
         # Get sessions in reverse order (newest first)

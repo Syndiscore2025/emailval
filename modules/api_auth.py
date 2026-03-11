@@ -10,6 +10,11 @@ from flask import request, jsonify
 from functools import wraps
 
 from modules.json_store import json_file_lock, load_json_data, save_json_data_atomic
+from modules.runtime_state_backend import (
+    get_runtime_state_table_name,
+    postgres_transaction,
+    use_postgres_runtime_state,
+)
 
 
 API_KEYS_DB_FILE = os.path.join('data', 'api_keys.json')
@@ -48,7 +53,17 @@ class APIKeyManager:
     def __init__(self, db_file: str = API_KEYS_DB_FILE):
         self.db_file = db_file
         self.lock = Lock()
-        self.data = self._load()
+        self.backend = 'postgres' if use_postgres_runtime_state() else 'json'
+        self.postgres_table = get_runtime_state_table_name('api_keys')
+        self._postgres_table_ready = False
+        self.data = self._empty_data()
+        if self._use_postgres():
+            self._ensure_postgres_table()
+        else:
+            self.data = self._load()
+
+    def _use_postgres(self) -> bool:
+        return self.backend == 'postgres'
 
     def _empty_data(self) -> Dict[str, Any]:
         return {"keys": {}}
@@ -60,10 +75,86 @@ class APIKeyManager:
         return self._empty_data()
 
     def _refresh_from_disk(self) -> None:
+        if self._use_postgres():
+            return
         self.data = self._load()
 
     def _save(self) -> None:
+        if self._use_postgres():
+            return
         save_json_data_atomic(self.db_file, self.data)
+
+    def _ensure_postgres_table(self) -> None:
+        if not self._use_postgres() or self._postgres_table_ready:
+            return
+
+        with postgres_transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self.postgres_table} (
+                        key_id TEXT PRIMARY KEY,
+                        key_hash TEXT NOT NULL UNIQUE,
+                        key_data TEXT NOT NULL
+                    )
+                    """
+                )
+
+        self._postgres_table_ready = True
+
+    def _deserialize_key_data(self, raw_value: Any) -> Dict[str, Any]:
+        if isinstance(raw_value, dict):
+            return dict(raw_value)
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode('utf-8')
+        if not raw_value:
+            return {}
+        data = json.loads(raw_value)
+        return data if isinstance(data, dict) else {}
+
+    def _postgres_fetch_key_record(self, cursor, *, key_id: Optional[str] = None,
+                                   key_hash: Optional[str] = None,
+                                   for_update: bool = False) -> Optional[Tuple[str, Dict[str, Any]]]:
+        clauses = []
+        params = []
+        if key_id is not None:
+            clauses.append('key_id = %s')
+            params.append(key_id)
+        if key_hash is not None:
+            clauses.append('key_hash = %s')
+            params.append(key_hash)
+        if not clauses:
+            raise ValueError('A Postgres API key lookup requires key_id or key_hash')
+
+        query = (
+            f"SELECT key_id, key_hash, key_data FROM {self.postgres_table} "
+            f"WHERE {' AND '.join(clauses)}"
+        )
+        if for_update:
+            query += ' FOR UPDATE'
+
+        cursor.execute(query, tuple(params))
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        resolved_key_id, resolved_key_hash, raw_data = row
+        data = self._deserialize_key_data(raw_data)
+        if resolved_key_hash and 'key_hash' not in data:
+            data['key_hash'] = resolved_key_hash
+        return resolved_key_id, data
+
+    def _postgres_upsert_key(self, cursor, key_id: str, key_data: Dict[str, Any]) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO {self.postgres_table} (key_id, key_hash, key_data)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (key_id) DO UPDATE
+            SET key_hash = EXCLUDED.key_hash,
+                key_data = EXCLUDED.key_data
+            """,
+            (key_id, key_data.get('key_hash'), json.dumps(key_data)),
+        )
 
     @property
     def keys(self) -> Dict[str, Dict[str, Any]]:
@@ -78,22 +169,30 @@ class APIKeyManager:
         key_id = "ak_" + secrets.token_hex(8)
         key_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
         now = datetime.utcnow().isoformat()
+        key_data = {
+            "key_hash": key_hash,
+            "name": name,
+            "created_at": now,
+            "active": True,
+            "rate_limit_per_minute": int(rate_limit_per_minute),
+            "usage_total": 0,
+            "window_start": None,
+            "window_count": 0,
+        }
 
         with self.lock:
-            with json_file_lock(self.db_file):
-                self._refresh_from_disk()
-                self.keys[key_id] = {
-                    "key_hash": key_hash,
-                    "name": name,
-                    "created_at": now,
-                    "active": True,
-                    "rate_limit_per_minute": int(rate_limit_per_minute),
-                    "usage_total": 0,
-                    "window_start": None,
-                    "window_count": 0,
-                }
-                self._save()
-                meta = {k: v for k, v in self.keys[key_id].items() if k != "key_hash"}
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        self._postgres_upsert_key(cursor, key_id, key_data)
+                meta = {k: v for k, v in key_data.items() if k != 'key_hash'}
+            else:
+                with json_file_lock(self.db_file):
+                    self._refresh_from_disk()
+                    self.keys[key_id] = key_data
+                    self._save()
+                    meta = {k: v for k, v in self.keys[key_id].items() if k != "key_hash"}
 
         meta["key_id"] = key_id
         return {"api_key": api_key, "metadata": meta}
@@ -102,6 +201,12 @@ class APIKeyManager:
         """Return (key_id, key_data) for the provided secret, if valid."""
         key_hash = hashlib.sha256(api_key.encode('utf-8')).hexdigest()
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        return self._postgres_fetch_key_record(cursor, key_hash=key_hash)
+
             self._refresh_from_disk()
             for key_id, data in self.keys.items():
                 if data.get("key_hash") == key_hash:
@@ -114,6 +219,49 @@ class APIKeyManager:
         Returns (allowed, retry_after_seconds).
         """
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        resolved = self._postgres_fetch_key_record(cursor, key_id=key_id, for_update=True)
+                        if not resolved:
+                            return False, None
+                        _, data = resolved
+                        if not data.get("active", False):
+                            return False, None
+
+                        limit = int(data.get("rate_limit_per_minute", 60))
+                        now = datetime.utcnow()
+
+                        window_start_str = data.get("window_start")
+                        window_count = int(data.get("window_count") or 0)
+
+                        if window_start_str:
+                            try:
+                                window_start = datetime.fromisoformat(window_start_str)
+                            except Exception:
+                                window_start = now
+                                window_count = 0
+                        else:
+                            window_start = now
+                            window_count = 0
+
+                        elapsed = (now - window_start).total_seconds()
+                        if elapsed >= 60:
+                            window_start = now
+                            window_count = 0
+
+                        if window_count >= limit:
+                            retry_after = max(0, 60 - int(elapsed))
+                            return False, retry_after
+
+                        window_count += 1
+                        data["window_start"] = window_start.isoformat()
+                        data["window_count"] = window_count
+                        data["usage_total"] = int(data.get("usage_total", 0)) + 1
+                        self._postgres_upsert_key(cursor, key_id, data)
+                        return True, None
+
             with json_file_lock(self.db_file):
                 self._refresh_from_disk()
                 data = self.keys.get(key_id)
@@ -155,6 +303,21 @@ class APIKeyManager:
 
     def list_keys(self):
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            f"SELECT key_id, key_data FROM {self.postgres_table}"
+                        )
+                        result = []
+                        for key_id, raw_data in cursor.fetchall():
+                            data = self._deserialize_key_data(raw_data)
+                            meta = {k: v for k, v in data.items() if k != "key_hash"}
+                            meta["key_id"] = key_id
+                            result.append(meta)
+                        return result
+
             self._refresh_from_disk()
             result = []
             for key_id, data in self.keys.items():
@@ -165,6 +328,18 @@ class APIKeyManager:
 
     def revoke_key(self, key_id: str) -> bool:
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        resolved = self._postgres_fetch_key_record(cursor, key_id=key_id, for_update=True)
+                        if not resolved:
+                            return False
+                        _, data = resolved
+                        data["active"] = False
+                        self._postgres_upsert_key(cursor, key_id, data)
+                        return True
+
             with json_file_lock(self.db_file):
                 self._refresh_from_disk()
                 data = self.keys.get(key_id)
@@ -176,6 +351,18 @@ class APIKeyManager:
 
     def get_usage(self, key_id: str) -> Optional[Dict[str, Any]]:
         with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        resolved = self._postgres_fetch_key_record(cursor, key_id=key_id)
+                        if not resolved:
+                            return None
+                        _, data = resolved
+                        meta = {k: v for k, v in data.items() if k != "key_hash"}
+                        meta["key_id"] = key_id
+                        return meta
+
             self._refresh_from_disk()
             data = self.keys.get(key_id)
             if not data:
