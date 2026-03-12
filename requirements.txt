@@ -9,7 +9,7 @@ dnspython==2.4.2
 # File Parsing Libraries
 openpyxl==3.1.2  # Excel .xlsx files
 xlrd==2.0.1      # Excel .xls files
-PyPDF2==3.0.1    # PDF files
+pypdf==4.3.1     # PDF files (replaces deprecated PyPDF2)
 
 # Production Server
 gunicorn==21.2.0

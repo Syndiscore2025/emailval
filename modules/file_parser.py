@@ -24,9 +24,10 @@ except ImportError:
     XLRD_AVAILABLE = False
 
 try:
-    import PyPDF2
+    from pypdf import PdfReader as _PdfReader
     PYPDF2_AVAILABLE = True
 except ImportError:
+    _PdfReader = None
     PYPDF2_AVAILABLE = False
 
 
@@ -818,7 +819,7 @@ def parse_pdf(file_content: bytes, filename: str = "") -> Dict[str, Any]:
     extraction_methods = {"column_mapping": 0, "full_scan": 0, "at_symbol_scan": 0}
 
     if not PYPDF2_AVAILABLE:
-        errors.append("PDF parsing library not available. Install PyPDF2.")
+        errors.append("PDF parsing library not available. Install pypdf.")
         return {
             "emails": [],
             "summary": {
@@ -830,7 +831,7 @@ def parse_pdf(file_content: bytes, filename: str = "") -> Dict[str, Any]:
         }
 
     try:
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
+        pdf_reader = _PdfReader(io.BytesIO(file_content))
         total_pages = len(pdf_reader.pages)
 
         # Extract text from all pages
