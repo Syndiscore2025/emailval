@@ -222,6 +222,8 @@ You can also set `DATABASE_URL` as a fallback if `RUNTIME_STATE_DATABASE_URL` is
 | `SMTP_MAX_WORKERS` | `20` | Concurrent SMTP check workers |
 | `OUTBOUND_DELIVERY_WORKERS` | `1` | Callback/KPI delivery threads |
 | `OUTBOUND_DELIVERY_QUEUE_SIZE` | `500` | Max queued delivery tasks |
+| `VALIDATION_WORKERS` | `1` | Shared validation job queue threads |
+| `VALIDATION_QUEUE_SIZE` | `500` | Max queued validation jobs before fallback thread |
 | `GUNICORN_BIND` | `127.0.0.1:8000` | Droplet only (App Platform ignores) |
 | `GUNICORN_WORKERS` | `2` | Gunicorn worker processes |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -298,6 +300,8 @@ CRM_CONFIG_ENCRYPTION_KEY=replace-with-fernet-key
 SMTP_ENABLED=false
 OUTBOUND_DELIVERY_WORKERS=1
 OUTBOUND_DELIVERY_QUEUE_SIZE=500
+VALIDATION_WORKERS=1
+VALIDATION_QUEUE_SIZE=500
 LOG_LEVEL=INFO
 LOG_FORMAT=json
 GUNICORN_BIND=127.0.0.1:8000

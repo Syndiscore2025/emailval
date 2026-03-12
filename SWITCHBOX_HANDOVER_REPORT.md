@@ -39,8 +39,26 @@ Body: { "name": "Switchbox Production", "rate_limit": 1000 }
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/health` | None | Liveness check — always returns 200 |
+| `GET` | `/health` | None | Liveness check — always returns 200; payload includes per-subsystem checks |
 | `GET` | `/ready` | None | Readiness check — returns 503 if critical systems down |
+
+`/health` `checks` object includes:
+
+| Key | What it reports |
+|---|---|
+| `api_key_store` | API key store reachability and key count |
+| `job_tracker_store` | Job tracker reachability |
+| `crm_config_store` | CRM config store reachability |
+| `crm_upload_store` | CRM upload store reachability |
+| `outbound_delivery` | Callback/KPI delivery worker pool status (started, alive, queue depth) |
+| `validation_worker` | Validation job worker pool status (started, alive, queue depth) |
+| `secret_key` | Whether `SECRET_KEY` is the default (unsafe) placeholder |
+| `admin_auth` | Whether admin credentials are configured |
+| `webhook_signing` | Whether webhook HMAC signing is configured |
+| `smtp_validation` | Whether live SMTP checks are enabled |
+| `runtime_state` | Active state backend (`json` or `postgres`) |
+| `data_directory` | Local data dir read/write accessibility |
+| `external_kpi` | External KPI delivery configuration status |
 
 ### Single Email Validation
 
