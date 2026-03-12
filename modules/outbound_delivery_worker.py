@@ -68,9 +68,12 @@ class OutboundDeliveryWorker:
             try:
                 func(*args, **kwargs)
             except Exception:
-                logger.exception('Outbound delivery job crashed', extra={
+                # Log with dead_letter=True so operators can filter for
+                # permanently failed jobs in the structured log drain.
+                logger.exception('Outbound delivery dead-lettered', extra={
                     'job_name': job_name,
                     'worker_number': worker_number,
+                    'dead_letter': True,
                 })
             finally:
                 self.queue.task_done()

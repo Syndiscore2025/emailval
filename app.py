@@ -3153,68 +3153,82 @@ def upload_to_s3(upload_id: str, segregated_lists: Dict[str, List], s3_config: D
         raise Exception(f"Unexpected S3 error: {str(e)}")
 
 
-def send_crm_callback(callback_url: str, response_data: Dict[str, Any], settings: Dict[str, Any]):
-    """Send callback to CRM webhook"""
-    try:
-        # Build callback payload
-        payload = json.dumps(response_data).encode('utf-8')
+def send_crm_callback(callback_url: str, response_data: Dict[str, Any], settings: Dict[str, Any],
+                      max_retries: int = 3, backoff_factor: float = 1.5, timeout: int = 10):
+    """Send callback to CRM webhook with retry-with-backoff and dead-letter logging."""
+    payload = json.dumps(response_data).encode('utf-8')
+    signature_secret = settings.get('callback_signature_secret')
 
-        # Create signature if secret is configured
-        signature_secret = settings.get('callback_signature_secret')
-        headers = {
-            'Content-Type': 'application/json',
-            INTEGRATION_CONTRACT_HEADER: INTEGRATION_CONTRACT_VERSION,
-        }
+    for attempt in range(1, max_retries + 1):
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                INTEGRATION_CONTRACT_HEADER: INTEGRATION_CONTRACT_VERSION,
+            }
+            if signature_secret:
+                timestamp = str(int(time.time()))
+                headers[WEBHOOK_SIGNATURE_HEADER] = compute_webhook_signature(signature_secret, payload)
+                headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp
+                headers[WEBHOOK_SIGNATURE_V2_HEADER] = compute_webhook_signature(
+                    signature_secret, payload, timestamp=timestamp,
+                )
 
-        if signature_secret:
-            timestamp = str(int(time.time()))
-            headers[WEBHOOK_SIGNATURE_HEADER] = compute_webhook_signature(signature_secret, payload)
-            headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp
-            headers[WEBHOOK_SIGNATURE_V2_HEADER] = compute_webhook_signature(
-                signature_secret,
-                payload,
-                timestamp=timestamp,
-            )
+            req = urllib.request.Request(callback_url, data=payload, headers=headers, method='POST')
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                record_operational_event(
+                    'callback_delivery',
+                    status='delivered',
+                    callback_url=callback_url,
+                    attempt=attempt,
+                    status_code=response.status,
+                    source='crm_callback',
+                    job_id=response_data.get('job_id'),
+                    event=response_data.get('event'),
+                )
+                logger.info("CRM callback delivered", extra={
+                    'callback_url': callback_url,
+                    'status_code': response.status,
+                    'attempt': attempt,
+                })
+                return  # success
 
-        # Send POST request
-        req = urllib.request.Request(
-            callback_url,
-            data=payload,
-            headers=headers,
-            method='POST'
-        )
-
-        with urllib.request.urlopen(req, timeout=10) as response:
-            record_operational_event(
-                'callback_delivery',
-                status='delivered',
-                callback_url=callback_url,
-                attempt=1,
-                status_code=response.status,
-                source='crm_callback',
-                job_id=response_data.get('job_id'),
-                event=response_data.get('event'),
-            )
-            logger.info("CRM callback delivered", extra={
-                'callback_url': callback_url,
-                'status_code': response.status,
-            })
-
-    except Exception as e:
-        record_operational_event(
-            'callback_delivery',
-            status='failed',
-            callback_url=callback_url,
-            attempt=1,
-            error=str(e),
-            source='crm_callback',
-            job_id=response_data.get('job_id'),
-            event=response_data.get('event'),
-        )
-        logger.error("CRM callback delivery failed", extra={
-            'callback_url': callback_url,
-            'error': str(e),
-        })
+        except Exception as e:
+            if attempt == max_retries:
+                record_operational_event(
+                    'callback_delivery',
+                    status='failed',
+                    callback_url=callback_url,
+                    attempt=attempt,
+                    error=str(e),
+                    source='crm_callback',
+                    job_id=response_data.get('job_id'),
+                    event=response_data.get('event'),
+                )
+                logger.error("CRM callback dead-lettered", extra={
+                    'callback_url': callback_url,
+                    'attempts': max_retries,
+                    'error': str(e),
+                    'dead_letter': True,
+                })
+            else:
+                sleep_time = backoff_factor ** (attempt - 1)
+                record_operational_event(
+                    'callback_delivery',
+                    status='retrying',
+                    callback_url=callback_url,
+                    attempt=attempt,
+                    sleep_seconds=sleep_time,
+                    error=str(e),
+                    source='crm_callback',
+                    job_id=response_data.get('job_id'),
+                    event=response_data.get('event'),
+                )
+                logger.warning("CRM callback delivery retry scheduled", extra={
+                    'callback_url': callback_url,
+                    'attempt': attempt,
+                    'sleep_seconds': sleep_time,
+                })
+                time.sleep(sleep_time)
 
 
 def start_crm_callback_delivery(callback_url: str, response_data: Dict[str, Any], settings: Dict[str, Any]) -> None:
