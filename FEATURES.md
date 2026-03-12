@@ -96,6 +96,12 @@
 - [x] Detailed results
 - [x] Summary statistics
 
+### Self-Service Key Management
+- [x] `GET /api/keys/self` — caller inspects their own key metadata and usage totals
+- [x] `PATCH /api/keys/self/rate-limit` — caller updates their own rate limit (min 1, no admin token needed)
+- [x] Works with both JSON and Postgres backends
+- [x] Returns `400` for missing/invalid limit, `404` if key not found
+
 ### CRM Webhook (`POST /api/webhook/validate`)
 - [x] Flexible payload formats
 - [x] Single email support
@@ -265,7 +271,7 @@
 - **Total Files**: 50+
 - **Lines of Code**: 6000+
 - **Modules**: 25+
-- **API Endpoints**: 21+
+- **API Endpoints**: 23+
 - **Test Files**: 9
 - **Documentation Files**: 4
 - **Disposable Domains**: 35+

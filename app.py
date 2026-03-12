@@ -34,7 +34,7 @@ from modules.file_parser import parse_file
 from modules.utils import normalize_email, create_validation_result, calculate_deliverability_score, get_deliverability_rating
 from modules.email_tracker import get_tracker
 from modules.job_tracker import get_job_tracker
-from modules.api_auth import require_api_key, get_key_manager
+from modules.api_auth import require_api_key, get_key_manager, resolve_request_key
 from modules.crm_adapter import (
     parse_crm_request,
     build_crm_response,
@@ -4062,6 +4062,80 @@ def export_results():
         return jsonify({
             "error": f"Export error: {str(e)}"
         }), 500
+
+
+# ============================================================================
+# SELF-SERVICE KEY ENDPOINTS  (authenticated caller manages their own key)
+# ============================================================================
+
+@app.route('/api/keys/self', methods=['GET'])
+@require_api_key
+def get_self_key_info():
+    """Return metadata for the API key making this request.
+
+    Switchbox (or any integrator) can use this to inspect their current
+    rate limit, usage totals, and key status without contacting the admin.
+
+    Authentication: X-API-Key header (same key used for all other endpoints)
+    """
+    resolved = resolve_request_key()
+    if not resolved:
+        return jsonify({"error": "Unable to resolve API key"}), 401
+
+    key_id, _ = resolved
+    manager = get_key_manager()
+    usage = manager.get_usage(key_id)
+    if not usage:
+        return jsonify({"error": "Key not found"}), 404
+
+    # Return everything except the key hash
+    safe = {k: v for k, v in usage.items() if k != "key_hash"}
+    safe["key_id"] = key_id
+    return jsonify({"key": safe}), 200
+
+
+@app.route('/api/keys/self/rate-limit', methods=['PATCH'])
+@require_api_key
+def update_self_rate_limit():
+    """Update the rate limit for the API key making this request.
+
+    Switchbox can call this to adjust their own throughput cap without
+    needing to contact the platform admin.
+
+    Body:
+        { "rate_limit_per_minute": 200 }
+
+    Authentication: X-API-Key header
+    """
+    resolved = resolve_request_key()
+    if not resolved:
+        return jsonify({"error": "Unable to resolve API key"}), 401
+
+    key_id, _ = resolved
+
+    body = request.get_json(silent=True) or {}
+    new_limit_raw = body.get("rate_limit_per_minute")
+
+    if new_limit_raw is None:
+        return jsonify({"error": "Missing required field: rate_limit_per_minute"}), 400
+
+    try:
+        new_limit = int(new_limit_raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "rate_limit_per_minute must be an integer"}), 400
+
+    if new_limit < 1:
+        return jsonify({"error": "rate_limit_per_minute must be at least 1"}), 400
+
+    manager = get_key_manager()
+    if not manager.update_rate_limit(key_id, new_limit):
+        return jsonify({"error": "Key not found"}), 404
+
+    return jsonify({
+        "success": True,
+        "key_id": key_id,
+        "rate_limit_per_minute": new_limit,
+    }), 200
 
 
 @app.route('/api/keys', methods=['POST'])

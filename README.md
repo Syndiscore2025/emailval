@@ -56,6 +56,9 @@ A production-grade, modular SaaS web application for validating email addresses 
   - Encrypted AWS credentials storage (Fernet encryption)
   - API key authentication
   - Configurable premium features
+- 🔑 **Self-Service Rate Limit Management**:
+  - `GET /api/keys/self` — inspect your own key metadata and usage
+  - `PATCH /api/keys/self/rate-limit` — update your own rate limit with no admin involvement
 - 🔄 **Reliable Callback Delivery**:
   - Retry-with-exponential-backoff (3 attempts, factor 1.5×) for CRM callbacks
   - Dead-letter log marker (`dead_letter: true`) on permanent failure — searchable in log drain

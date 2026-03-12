@@ -405,3 +405,27 @@ For your specific pattern, the safest first DigitalOcean launch is:
 - webhook signing left disabled unless you know Switchbox is already set up for it
 
 That keeps the move additive and avoids changing the existing Switchbox CRM flow.
+
+---
+
+## Switchbox self-service rate limit management
+
+Once Switchbox has their API key, they can manage their own throughput without contacting you.
+
+**View their current rate limit and usage:**
+
+```bash
+curl -s https://${DOMAIN}/api/keys/self \
+  -H "X-API-Key: <switchbox-api-key>"
+```
+
+**Update their rate limit:**
+
+```bash
+curl -s -X PATCH https://${DOMAIN}/api/keys/self/rate-limit \
+  -H "X-API-Key: <switchbox-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"rate_limit_per_minute": 200}'
+```
+
+No admin token is required — their API key authenticates the request and they can only modify their own key.

@@ -33,6 +33,36 @@
       ]
     },
     {
+      "name": "Self-Service Key Management",
+      "item": [
+        {
+          "name": "GET /api/keys/self — View my key info",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-API-Key", "value": "{{api_key}}" }],
+            "url": "{{base_url}}/api/keys/self",
+            "description": "Returns metadata for the calling API key: name, rate_limit_per_minute, usage_total, window_count, active status. No admin token required — the key authenticates itself."
+          }
+        },
+        {
+          "name": "PATCH /api/keys/self/rate-limit — Update my rate limit",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rate_limit_per_minute\": 200\n}"
+            },
+            "url": "{{base_url}}/api/keys/self/rate-limit",
+            "description": "Allows the key holder (e.g. Switchbox) to update their own rate limit without contacting the platform admin. Minimum value: 1."
+          }
+        }
+      ]
+    },
+    {
       "name": "Admin — API Key Management",
       "item": [
         {

@@ -349,6 +349,33 @@ class APIKeyManager:
                 self._save()
                 return True
 
+    def update_rate_limit(self, key_id: str, new_limit: int) -> bool:
+        """Update the rate_limit_per_minute for an existing key.
+
+        Returns True if the key was found and updated, False otherwise.
+        """
+        with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        resolved = self._postgres_fetch_key_record(cursor, key_id=key_id, for_update=True)
+                        if not resolved:
+                            return False
+                        _, data = resolved
+                        data["rate_limit_per_minute"] = int(new_limit)
+                        self._postgres_upsert_key(cursor, key_id, data)
+                        return True
+
+            with json_file_lock(self.db_file):
+                self._refresh_from_disk()
+                data = self.keys.get(key_id)
+                if not data:
+                    return False
+                data["rate_limit_per_minute"] = int(new_limit)
+                self._save()
+                return True
+
     def get_usage(self, key_id: str) -> Optional[Dict[str, Any]]:
         with self.lock:
             if self._use_postgres():
@@ -380,6 +407,22 @@ def get_key_manager() -> APIKeyManager:
     if _api_key_manager is None:
         _api_key_manager = APIKeyManager()
     return _api_key_manager
+
+
+def resolve_request_key() -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Resolve the API key from the current request.
+
+    Returns (key_id, key_data) if a valid key is present, else None.
+    Does NOT enforce rate limiting — use require_api_key for that.
+    Intended for self-service endpoints that need to identify the caller.
+    """
+    api_key = request.headers.get("X-API-Key")
+    if not api_key and allow_api_key_query_param():
+        api_key = request.args.get("api_key")
+    if not api_key:
+        return None
+    manager = get_key_manager()
+    return manager.get_key_by_secret(api_key)
 
 
 def require_api_key(func):

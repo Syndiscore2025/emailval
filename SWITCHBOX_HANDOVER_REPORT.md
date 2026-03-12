@@ -275,6 +275,59 @@ If `callback_url` is set, the result will be POSTed back asynchronously once val
 
 If `callback_signature_secret` is configured, callbacks include an `X-Webhook-Signature` header (HMAC-SHA256 of the raw body).
 
+---
+
+## Self-Service Rate Limit Management
+
+Switchbox can inspect and adjust their own API key without contacting the platform admin.
+
+### View current key info
+
+```
+GET /api/keys/self
+X-API-Key: <your-api-key>
+```
+
+Response:
+```json
+{
+  "key": {
+    "key_id": "ak_abc123",
+    "name": "Switchbox Production",
+    "rate_limit_per_minute": 100,
+    "usage_total": 4820,
+    "window_count": 3,
+    "active": true,
+    "created_at": "2026-01-15T10:00:00"
+  }
+}
+```
+
+### Update rate limit
+
+```
+PATCH /api/keys/self/rate-limit
+X-API-Key: <your-api-key>
+Content-Type: application/json
+
+{ "rate_limit_per_minute": 200 }
+```
+
+Response:
+```json
+{
+  "success": true,
+  "key_id": "ak_abc123",
+  "rate_limit_per_minute": 200
+}
+```
+
+- Minimum value: `1`
+- Takes effect immediately on the next request
+- No admin token required — the key authenticates itself
+
+---
+
 ### Callback delivery reliability
 
 The callback delivery worker retries failed POSTs with **exponential backoff**:
