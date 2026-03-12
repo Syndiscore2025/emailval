@@ -6,7 +6,7 @@ A production-grade, modular SaaS web application for validating email addresses 
 
 ### Core Validation
 - ✅ **Single Email Validation** - Validate individual email addresses via web UI or API
-- 📁 **Bulk File Upload** - Support for CSV, XLS, XLSX, and PDF files
+- 📁 **Bulk File Upload** - Streaming CSV/XLS/XLSX/PDF processing (memory-efficient, no disk writes)
 - 🔌 **CRM Integration** - Full two-way integration with manual/auto validation modes
 - 🎯 **Multi-Layer Validation**:
   - Syntax validation (RFC 5322 compliant)
@@ -56,6 +56,9 @@ A production-grade, modular SaaS web application for validating email addresses 
   - Encrypted AWS credentials storage (Fernet encryption)
   - API key authentication
   - Configurable premium features
+- 🔄 **Reliable Callback Delivery**:
+  - Retry-with-exponential-backoff (3 attempts, factor 1.5×) for CRM callbacks
+  - Dead-letter log marker (`dead_letter: true`) on permanent failure — searchable in log drain
 - 🔌 **RESTful API**:
   - Lead upload endpoint
   - Manual validation trigger
@@ -66,47 +69,66 @@ A production-grade, modular SaaS web application for validating email addresses 
 ## Project Structure
 
 ```
-email_validator/
-├── app.py                  # Main Flask application
+emailval/
+├── app.py                  # Main Flask application (21+ API endpoints)
 ├── requirements.txt        # Python dependencies
 ├── Procfile               # Render deployment config
 ├── runtime.txt            # Python version
 ├── modules/
-│   ├── syntax_check.py    # RFC 5322 syntax validation
-│   ├── domain_check.py    # DNS MX/A record validation
-│   ├── type_check.py      # Disposable/role-based detection
-│   ├── smtp_check.py      # SMTP mailbox verification
-│   ├── catchall_check.py  # Catch-all domain detection
-│   ├── file_parser.py     # CSV/XLS/PDF parsing with dynamic column handling
-│   ├── reporting.py       # CSV/Excel/PDF report generation
-│   ├── email_tracker.py   # Persistent email deduplication
-│   ├── api_auth.py        # API key authentication
-│   ├── admin_auth.py      # Admin authentication
-│   ├── crm_adapter.py     # CRM integration adapter with email segregation
-│   ├── crm_config.py      # CRM configuration management with encryption
-│   ├── lead_manager.py    # Lead upload tracking system
-│   ├── s3_delivery.py     # AWS S3 delivery for validated lists
-│   ├── job_tracker.py     # Background job tracking
-│   └── utils.py           # Utility functions + deliverability scoring
+│   ├── syntax_check.py          # RFC 5322 syntax validation
+│   ├── domain_check.py          # DNS MX/A record validation
+│   ├── type_check.py            # Disposable/role-based detection
+│   ├── smtp_check.py            # SMTP mailbox verification (sync)
+│   ├── smtp_check_async.py      # SMTP mailbox verification (async)
+│   ├── catchall_check.py        # Catch-all domain detection
+│   ├── obvious_invalid.py       # Fast pre-filter for obviously invalid emails
+│   ├── file_parser.py           # Streaming CSV/XLS/PDF parsing (pypdf)
+│   ├── reporting.py             # CSV/Excel/PDF report generation
+│   ├── email_tracker.py         # Persistent email deduplication
+│   ├── api_auth.py              # API key auth + sliding-window rate limiting
+│   ├── admin_auth.py            # Admin session authentication
+│   ├── admin_email_actions.py   # Admin email management actions
+│   ├── crm_adapter.py           # CRM integration adapter with email segregation
+│   ├── crm_config.py            # CRM configuration management with encryption
+│   ├── lead_manager.py          # Lead upload tracking system
+│   ├── s3_delivery.py           # AWS S3 delivery for validated lists
+│   ├── job_tracker.py           # Background job tracking
+│   ├── validation_worker.py     # Background validation job queue
+│   ├── outbound_delivery_worker.py # Async callback delivery with retry/backoff
+│   ├── webhook_log_manager.py   # Webhook request/response logging
+│   ├── runtime_state_backend.py # Postgres / JSON state backend selector
+│   ├── json_store.py            # Thread-safe JSON file I/O
+│   ├── external_kpi.py          # External KPI event delivery (Switchbox)
+│   ├── n8n_integration.py       # n8n automation integration
+│   ├── backup_manager.py        # Data backup utilities
+│   ├── logger.py                # Structured JSON/text logger setup
+│   └── utils.py                 # Utility functions + deliverability scoring
 ├── templates/
 │   ├── index.html         # Main web interface
+│   ├── developer.html     # Developer/API docs view
 │   └── admin/
-│       └── dashboard.html # Admin dashboard (Phase 7)
+│       └── dashboard.html # Admin dashboard
 ├── static/
 │   ├── css/
 │   │   └── admin.css      # Admin dashboard styles
 │   └── js/
 │       └── admin.js       # Admin dashboard JavaScript
 ├── data/
-│   ├── email_history.json # Persistent email tracking database
-│   ├── validation_jobs.json # Background job tracking
-│   ├── api_keys.json      # API key storage
-│   ├── crm_configs.json   # CRM configurations (encrypted credentials)
-│   └── crm_uploads.json   # CRM lead upload tracking
+│   ├── api_keys.json        # API key storage (or Postgres table)
+│   ├── email_history.json   # Persistent email tracking (or Postgres table)
+│   ├── validation_jobs.json # Background job tracking (or Postgres table)
+│   ├── crm_configs.json     # CRM configurations (encrypted credentials)
+│   └── webhook_logs.json    # Webhook request/response log
 └── tests/
-    ├── test_crm_modules_direct.py  # CRM module tests
-    ├── test_crm_endpoints.py       # CRM API endpoint tests
-    └── test_complete.py            # Complete validation tests
+    ├── test_complete.py                    # Core validation flow
+    ├── test_file_parser.py                 # CSV/XLS/PDF parser tests
+    ├── test_api_auth.py                    # API key auth & rate limiting
+    ├── test_crm_modules_direct.py          # CRM module unit tests
+    ├── test_crm_endpoints.py               # CRM API endpoint tests
+    ├── test_email_tracker.py               # Email tracker tests
+    ├── test_enterprise_integration_contract.py # Integration contract tests
+    ├── test_bulk_upload_monitoring.py      # Bulk upload monitoring tests
+    └── test_upload_non_smtp.py             # Upload without SMTP tests
 ```
 
 ## Installation
@@ -308,44 +330,67 @@ X-API-Key: your-api-key
 
 ## Testing
 
-Run individual module tests:
+Run the full test suite:
 ```bash
-python test_syntax.py
-python test_domain.py
-python test_type.py
-python test_file_parser.py
+python -m pytest -q
 ```
 
-Run phase-specific tests:
+Run specific suites:
 ```bash
-python test_phase4.py      # Phase 4: Dynamic column handling
-python test_analytics.py   # Phase 6: Analytics & reporting
-python test_e2e.py         # Phase 7: End-to-end integration
+python -m pytest test_complete.py           # Core validation flow
+python -m pytest test_file_parser.py        # CSV/XLS/PDF parser
+python -m pytest test_api_auth.py           # API key auth & rate limiting
+python -m pytest test_crm_endpoints.py      # CRM API endpoints
+python -m pytest test_crm_modules_direct.py # CRM module unit tests
 ```
 
-Run complete integration tests:
-```bash
-python test_complete.py
-```
+## Deployment
 
-## Deployment to Render
+### Render (current)
 
 1. Push code to GitHub
-2. Create new Web Service on Render
-3. Connect your repository
-4. Render will auto-detect the Procfile
-5. Set environment variables if needed
-6. Deploy!
+2. Create a new Web Service on Render and connect your repository
+3. Render auto-detects the `Procfile`
+4. Set the required environment variables (see below)
+5. Deploy — `/health` is used automatically for health checks
 
-The `/health` endpoint is automatically used by Render for health checks.
+### DigitalOcean
+
+See `DIGITAL_OCEAN_SETUP_GUIDE.md` for a full step-by-step guide covering App Platform and Droplet deployments with Postgres-backed state.
 
 ## Configuration
 
-Environment variables (optional):
-- `FLASK_ENV`: production/development
-- `PORT`: Server port (default: 5000)
-- `MAX_CONTENT_LENGTH`: Max file upload size in bytes
-- `SMTP_TIMEOUT`: SMTP verification timeout in seconds
+### Required in production
+
+| Variable | Notes |
+|---|---|
+| `SECRET_KEY` | 64-char random string — Flask session secret |
+| `ADMIN_USERNAME` | Admin UI login |
+| `ADMIN_PASSWORD` | Admin UI password |
+| `API_AUTH_ENABLED` | Set to `true` to enforce API key auth on all endpoints |
+| `API_KEY_ALLOW_QUERY_PARAM` | Set to `false` in production (header-only key delivery) |
+
+### Postgres runtime state (recommended for multi-worker / production)
+
+| Variable | Notes |
+|---|---|
+| `RUNTIME_STATE_BACKEND` | Set to `postgres` — defaults to `json` (single-worker only) |
+| `RUNTIME_STATE_DATABASE_URL` | Full Postgres connection URL |
+
+When `postgres` backend is active, all tables are auto-created on first start.
+
+### Optional features
+
+| Variable | Notes |
+|---|---|
+| `SMTP_ENABLED` | `true` to enable live SMTP MX checks (default: `false`) |
+| `WEBHOOK_SIGNING_SECRET` | HMAC key for signing outbound callbacks |
+| `REQUIRE_WEBHOOK_SIGNATURES` | Reject unsigned inbound webhooks |
+| `CRM_CONFIG_ENCRYPTION_KEY` | Fernet key for encrypting stored AWS credentials |
+| `EXTERNAL_KPI_ENABLED` | Send KPI events to Switchbox command center |
+| `SENTRY_DSN` | Sentry error tracking DSN |
+| `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
+| `LOG_FORMAT` | `json` or `text` (default: `json`) |
 
 ## License
 

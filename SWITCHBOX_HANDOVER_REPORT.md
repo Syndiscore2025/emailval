@@ -275,6 +275,18 @@ If `callback_url` is set, the result will be POSTed back asynchronously once val
 
 If `callback_signature_secret` is configured, callbacks include an `X-Webhook-Signature` header (HMAC-SHA256 of the raw body).
 
+### Callback delivery reliability
+
+The callback delivery worker retries failed POSTs with **exponential backoff**:
+
+| Attempt | Delay before retry |
+|---|---|
+| 1 (initial) | — |
+| 2 | ~1.5 s |
+| 3 | ~2.25 s |
+
+After 3 failed attempts the delivery is permanently abandoned and a `dead_letter: true` log entry is written. Monitor for this marker in your log drain if callbacks stop arriving.
+
 ---
 
 ## Error Responses
@@ -291,7 +303,7 @@ All errors return JSON:
 | `401` | Missing or invalid API key |
 | `404` | Resource not found |
 | `409` | Conflict (e.g. CRM config already exists) |
-| `429` | Rate limit exceeded |
+| `429` | Rate limit exceeded — includes `Retry-After: <seconds>` response header |
 | `500` | Internal server error |
 
 ---

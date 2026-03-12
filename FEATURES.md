@@ -46,6 +46,7 @@
 - [x] UTF-8 encoding support
 - [x] Empty row handling
 - [x] Malformed data handling
+- [x] Streaming row iteration (memory-efficient; no full list materialisation)
 
 ### Excel Support
 - [x] .xlsx file parsing (openpyxl)
@@ -56,7 +57,7 @@
 - [x] Large file handling
 
 ### PDF Support
-- [x] Text extraction from PDF
+- [x] Text extraction from PDF (via `pypdf`)
 - [x] Multi-page support
 - [x] Email pattern matching
 - [x] Regex-based extraction
@@ -103,6 +104,8 @@
 - [x] Array support
 - [x] Summary statistics
 - [x] Error handling
+- [x] Async callback delivery with retry-with-backoff (3 attempts, factor 1.5×)
+- [x] Dead-letter log marker (`dead_letter: true`) on permanent callback failure
 
 ## ✅ Web Interface
 
@@ -182,9 +185,9 @@
 
 ### Production Ready
 - [x] Gunicorn WSGI server
-- [x] Multi-worker support
-- [x] Health check endpoint
-- [x] Error logging
+- [x] Multi-worker support (Postgres-backed state — no shared file I/O between workers)
+- [x] Health check endpoint (`/health`) and readiness check (`/ready`)
+- [x] Structured JSON logging with dead-letter markers
 - [x] Environment variables
 - [x] Security headers
 
@@ -199,10 +202,10 @@
 
 ### User Documentation
 - [x] README.md
-- [x] QUICKSTART.md
-- [x] DEPLOYMENT.md
-- [x] API documentation
-- [x] Usage examples
+- [x] FEATURES.md
+- [x] DIGITAL_OCEAN_SETUP_GUIDE.md
+- [x] SWITCHBOX_HANDOVER_REPORT.md
+- [x] API documentation (inline in `/developer` endpoint and Postman collection)
 
 ### Developer Documentation
 - [x] Code comments
@@ -212,7 +215,7 @@
 - [x] Architecture overview
 
 ### Examples
-- [x] example_usage.py
+- [x] postman_collection.json (full Postman collection with variables)
 - [x] Test files
 - [x] API examples
 - [x] Integration examples
@@ -252,19 +255,19 @@
 
 ### Scalability
 - [x] Horizontal scaling support
-- [x] Multi-worker capable
-- [x] No database dependency
+- [x] Multi-worker capable (Postgres runtime state backend)
+- [x] Optional JSON-file backend for single-instance development
 - [x] Concurrent request handling
-- [x] Resource efficient
+- [x] Resource efficient (streaming CSV — no full-file materialisation)
 
 ## 📊 Statistics
 
-- **Total Files**: 25+
-- **Lines of Code**: 2000+
-- **Modules**: 6
-- **API Endpoints**: 4
-- **Test Files**: 6
-- **Documentation Files**: 5
+- **Total Files**: 50+
+- **Lines of Code**: 6000+
+- **Modules**: 25+
+- **API Endpoints**: 21+
+- **Test Files**: 9
+- **Documentation Files**: 4
 - **Disposable Domains**: 35+
 - **Role-Based Prefixes**: 40+
 
