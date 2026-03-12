@@ -10,7 +10,6 @@ from typing import Dict, Any, List, Optional
 import hmac
 import hashlib
 import json
-import threading
 import time
 from urllib.parse import urlparse
 import urllib.request
@@ -78,6 +77,7 @@ from modules.external_kpi import (
 )
 from modules.outbound_delivery_worker import dispatch_outbound_delivery, get_outbound_delivery_worker
 from modules.runtime_state_backend import get_runtime_state_backend, get_runtime_state_database_url
+from modules.validation_worker import dispatch_validation_job, get_validation_worker
 
 app = Flask(__name__)
 
@@ -2024,6 +2024,14 @@ def _build_health_checks() -> Dict[str, Dict[str, Any]]:
     except Exception as exc:
         checks['outbound_delivery'] = {'status': 'error', 'error': str(exc)}
 
+    try:
+        checks['validation_worker'] = {
+            'status': 'ok',
+            **get_validation_worker().get_status(),
+        }
+    except Exception as exc:
+        checks['validation_worker'] = {'status': 'error', 'error': str(exc)}
+
     external_enabled = external_kpi_enabled()
     external_configured = external_kpi_configured()
     checks['external_kpi'] = {
@@ -2514,13 +2522,9 @@ def upload_file():
                     traceback.print_exc()
                     job_tracker.complete_job(job_id, success=False, error=str(e))
 
-            thread = threading.Thread(
-                target=thread_wrapper,
-                daemon=True,
-            )
-            thread.start()
-            print(f"[UPLOAD] Background validation thread started for job {job_id}")
-            print(f"[UPLOAD] Thread is alive: {thread.is_alive()}")
+            queued = dispatch_validation_job(thread_wrapper, job_name='upload_validation')
+            print(f"[UPLOAD] Background validation dispatched for job {job_id}")
+            print(f"[UPLOAD] Validation worker queued job: {queued}")
 
             # Return immediately with job_id - client will stream progress via SSE
             if include_smtp:
@@ -3397,9 +3401,8 @@ def crm_upload_leads():
                     print(f"[ERROR] Auto-validation failed: {e}")
                     lead_manager.fail_validation(upload['upload_id'], error=str(e))
 
-            # Start background thread
-            thread = threading.Thread(target=run_auto_validation, daemon=True)
-            thread.start()
+            # Queue background validation
+            dispatch_validation_job(run_auto_validation, job_name='crm_auto_validation')
 
             return jsonify({
                 "success": True,
@@ -3563,9 +3566,8 @@ def crm_validate_leads(upload_id):
                 print(f"[ERROR] Manual validation failed: {e}")
                 lead_manager.fail_validation(upload_id, error=str(e))
 
-        # Start background thread
-        thread = threading.Thread(target=run_manual_validation, daemon=True)
-        thread.start()
+        # Queue background validation
+        dispatch_validation_job(run_manual_validation, job_name='crm_manual_validation')
 
         return jsonify({
             "success": True,

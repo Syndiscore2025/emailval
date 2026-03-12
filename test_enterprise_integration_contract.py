@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -45,6 +46,10 @@ class DummyOutboundWorker:
 
     def get_status(self):
         return dict(self._status)
+
+
+class DummyValidationWorker(DummyOutboundWorker):
+    pass
 
 
 class FakeRuntimeStateCursor:
@@ -754,7 +759,8 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         os.environ['SECRET_KEY'] = 'test-safe-secret-key-not-a-placeholder'
         os.environ['ADMIN_PASSWORD'] = 'test-safe-admin-password'
         os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = 'configured-key'
-        worker = DummyOutboundWorker()
+        outbound_worker = DummyOutboundWorker()
+        validation_worker = DummyValidationWorker()
 
         with patch.dict(app_module.app.config, {'SECRET_KEY': 'test-safe-secret-key-not-a-placeholder'}, clear=False), \
              patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
@@ -762,7 +768,8 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
              patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
              patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
              patch.object(app_module, 'get_webhook_log_manager', return_value=self.webhook_log_manager), \
-             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker):
+             patch.object(app_module, 'get_outbound_delivery_worker', return_value=outbound_worker), \
+             patch.object(app_module, 'get_validation_worker', return_value=validation_worker):
             client = app_module.app.test_client()
             response = client.get('/health')
 
@@ -773,6 +780,7 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertIn('uptime_seconds', payload)
         self.assertEqual(payload['checks']['api_key_store']['status'], 'ok')
         self.assertEqual(payload['checks']['outbound_delivery']['queue_capacity'], 500)
+        self.assertEqual(payload['checks']['validation_worker']['queue_capacity'], 500)
         self.assertEqual(payload['checks']['crm_encryption']['status'], 'ok')
         self.assertEqual(payload['checks']['secret_key']['status'], 'ok')
         self.assertEqual(payload['checks']['admin_auth']['status'], 'ok')
@@ -793,7 +801,8 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
              patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
              patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
              patch.object(app_module, 'get_webhook_log_manager', return_value=self.webhook_log_manager), \
-             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker):
+             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker), \
+             patch.object(app_module, 'get_validation_worker', return_value=DummyValidationWorker()):
             client = app_module.app.test_client()
             ready_response = client.get('/ready')
             health_response = client.get('/health')
@@ -819,7 +828,8 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
              patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
              patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
              patch.object(app_module, 'get_webhook_log_manager', return_value=self.webhook_log_manager), \
-             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker):
+             patch.object(app_module, 'get_outbound_delivery_worker', return_value=worker), \
+             patch.object(app_module, 'get_validation_worker', return_value=DummyValidationWorker()):
             client = app_module.app.test_client()
             response = client.get('/ready')
 
@@ -935,6 +945,101 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertIs(dispatch_mock.call_args.args[0], app_module.send_crm_callback)
         self.assertEqual(dispatch_mock.call_args.args[1], 'https://example.com/callback')
         self.assertEqual(dispatch_mock.call_args.kwargs['job_name'], 'crm_callback_delivery')
+
+    def test_upload_endpoint_queues_validation_job(self):
+        tracker = MagicMock()
+        tracker.check_duplicates.return_value = {
+            'new_emails': ['user@example.com'],
+            'duplicate_emails': [],
+        }
+        job_tracker = MagicMock()
+        job_tracker.create_job.return_value = 'job-upload-1'
+
+        with patch.object(app_module, 'parse_file', return_value={
+                'emails': ['user@example.com'],
+                'summary': {
+                    'file_info': {'file_type': 'csv'},
+                    'extraction_stats': {'emails_extracted': 1},
+                },
+            }), \
+             patch.object(app_module, 'get_tracker', return_value=tracker), \
+             patch.object(app_module, 'get_job_tracker', return_value=job_tracker), \
+             patch.object(app_module, 'dispatch_validation_job', return_value=True) as dispatch_mock:
+            client = app_module.app.test_client()
+            response = client.post(
+                '/upload',
+                data={
+                    'validate': 'true',
+                    'include_smtp': 'false',
+                    'files[]': (io.BytesIO(b'email\nuser@example.com\n'), 'leads.csv'),
+                },
+                content_type='multipart/form-data',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['job_id'], 'job-upload-1')
+        self.assertEqual(payload['validation_status'], 'in_progress')
+        self.assertEqual(dispatch_mock.call_count, 1)
+        self.assertTrue(callable(dispatch_mock.call_args.args[0]))
+        self.assertEqual(dispatch_mock.call_args.kwargs['job_name'], 'upload_validation')
+
+    def test_crm_auto_upload_queues_validation_job(self):
+        config_manager = MagicMock()
+        config_manager.get_config.return_value = {
+            'premium_features': {'auto_validate': True},
+            'settings': {'enable_smtp': True},
+        }
+        lead_manager = MagicMock()
+        lead_manager.create_upload.return_value = {'upload_id': 'upload-auto-1'}
+        job_tracker = MagicMock()
+
+        with patch.object(app_module, 'get_crm_config_manager', return_value=config_manager), \
+             patch.object(app_module, 'get_lead_manager', return_value=lead_manager), \
+             patch.object(app_module, 'get_job_tracker', return_value=job_tracker), \
+             patch.object(app_module, 'dispatch_validation_job', return_value=True) as dispatch_mock:
+            client = app_module.app.test_client()
+            response = client.post('/api/crm/leads/upload', json={
+                'crm_id': 'crm-1',
+                'crm_vendor': 'salesforce',
+                'validation_mode': 'auto',
+                'emails': ['user@example.com'],
+                'crm_context': [],
+            })
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.get_json()
+        lead_manager.start_validation.assert_called_once_with('upload-auto-1', payload['job_id'])
+        self.assertEqual(dispatch_mock.call_count, 1)
+        self.assertTrue(callable(dispatch_mock.call_args.args[0]))
+        self.assertEqual(dispatch_mock.call_args.kwargs['job_name'], 'crm_auto_validation')
+
+    def test_crm_manual_validation_queues_validation_job(self):
+        lead_manager = MagicMock()
+        lead_manager.get_upload.return_value = {
+            'upload_id': 'upload-manual-1',
+            'status': 'pending_validation',
+            'validation_mode': 'manual',
+            'crm_id': 'crm-1',
+            'crm_vendor': 'salesforce',
+            'emails': ['user@example.com'],
+            'crm_context': [],
+            'settings': {'enable_smtp': True},
+        }
+        job_tracker = MagicMock()
+
+        with patch.object(app_module, 'get_lead_manager', return_value=lead_manager), \
+             patch.object(app_module, 'get_job_tracker', return_value=job_tracker), \
+             patch.object(app_module, 'dispatch_validation_job', return_value=True) as dispatch_mock:
+            client = app_module.app.test_client()
+            response = client.post('/api/crm/leads/upload-manual-1/validate')
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.get_json()
+        lead_manager.start_validation.assert_called_once_with('upload-manual-1', payload['job_id'])
+        self.assertEqual(dispatch_mock.call_count, 1)
+        self.assertTrue(callable(dispatch_mock.call_args.args[0]))
+        self.assertEqual(dispatch_mock.call_args.kwargs['job_name'], 'crm_manual_validation')
 
 
     def test_webhook_log_manager_supports_postgres_runtime_state(self):
