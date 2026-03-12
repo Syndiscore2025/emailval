@@ -278,6 +278,7 @@ RUNTIME_STATE_BACKEND=postgres
 # Add manually if using external Postgres:
 # RUNTIME_STATE_DATABASE_URL=postgresql://user:pass@host:5432/dbname
 CRM_CONFIG_ENCRYPTION_KEY=generate-with-fernet
+WEBHOOK_SIGNING_SECRET=replace-with-long-random-string
 SMTP_ENABLED=false
 LOG_LEVEL=INFO
 LOG_FORMAT=json
@@ -297,6 +298,7 @@ API_KEY_ALLOW_QUERY_PARAM=false
 RUNTIME_STATE_BACKEND=postgres
 RUNTIME_STATE_DATABASE_URL=postgresql://emailval:password@localhost:5432/emailval
 CRM_CONFIG_ENCRYPTION_KEY=replace-with-fernet-key
+WEBHOOK_SIGNING_SECRET=replace-with-long-random-string
 SMTP_ENABLED=false
 OUTBOUND_DELIVERY_WORKERS=1
 OUTBOUND_DELIVERY_QUEUE_SIZE=500
