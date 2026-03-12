@@ -2409,6 +2409,8 @@ def upload_file():
                 file_content = file.read()
                 file_size_mb = len(file_content) / (1024 * 1024)
                 print(f"[UPLOAD] File size: {file_size_mb:.2f} MB")
+                if file_size_mb > 10:
+                    logger.warning("Large file upload", extra={"filename": filename, "size_mb": round(file_size_mb, 2)})
 
                 parse_result = parse_file(file_content, filename)
                 print(f"[UPLOAD] Parsed {filename}, found {len(parse_result.get('emails', []))} emails")

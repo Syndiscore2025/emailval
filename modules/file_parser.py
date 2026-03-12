@@ -4,6 +4,7 @@ Handles CSV, XLS/XLSX, and PDF file parsing with dynamic email extraction
 """
 import csv
 import io
+import itertools
 import re
 from typing import List, Dict, Any, BinaryIO, Union
 from difflib import SequenceMatcher
@@ -365,14 +366,19 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
         sample = file_content[:1024]
         try:
             dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
-        except:
+        except Exception:
             dialect = csv.excel
 
-        # Parse CSV
-        reader = csv.reader(io.StringIO(file_content), dialect=dialect)
+        # Helper: create a fresh reader over the already-decoded string.
+        # io.StringIO over an existing str is a lightweight view — no copy.
+        def _make_reader():
+            return csv.reader(io.StringIO(file_content), dialect=dialect)
 
-        rows = list(reader)
-        if not rows:
+        # --- Header detection: consume only the first row ---
+        _probe = _make_reader()
+        try:
+            first_row = next(_probe)
+        except StopIteration:
             errors.append("CSV file is empty")
             return {
                 "emails": [],
@@ -384,30 +390,35 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
                 "errors": errors
             }
 
-        # Check if first row looks like a header
-        header = [str(cell).lower().strip() for cell in rows[0]]
-        has_header = any(keyword in ' '.join(header) for keyword in ['email', 'e-mail', 'mail', 'contact', 'info', 'name', 'phone', 'address'])
-
-        # Check if first row contains emails (might not be a header)
-        first_row_has_emails = any(is_email_like(str(cell)) for cell in rows[0])
-
-        # Determine starting row
+        header = [str(cell).lower().strip() for cell in first_row]
+        has_header = any(kw in ' '.join(header) for kw in ['email', 'e-mail', 'mail', 'contact', 'info', 'name', 'phone', 'address'])
+        first_row_has_emails = any(is_email_like(str(cell)) for cell in first_row)
         start_row = 0 if (first_row_has_emails and not has_header) else 1
 
-        # Standardize column headers if we have them
         column_mapping = {}
         if has_header:
-            column_mapping = standardize_column_headers(rows[0])
+            column_mapping = standardize_column_headers(first_row)
 
-        # Method 1: Extract using column mapping
+        # Helper: open a fresh reader already positioned past the header row.
+        def _data_reader():
+            r = _make_reader()
+            if start_row > 0:
+                next(r, None)   # skip header
+            return r
+
+        total_rows = start_row   # header rows already accounted for
+        processed_rows = 0
+
+        # Method 1: stream through rows using column mapping
         if column_mapping and 'email' in column_mapping:
             email_idx = column_mapping['email']['index']
-            for row_num, row in enumerate(rows[start_row:], start=start_row + 1):
+            for row_num, row in enumerate(_data_reader(), start=start_row + 1):
+                total_rows += 1
+                processed_rows += 1
                 if email_idx < len(row) and row[email_idx]:
                     cell_str = str(row[email_idx]).strip()
                     if is_email_like(cell_str) and ' ' not in cell_str:
                         email_lower = normalize_email(cell_str)
-                        # Reconstruct with metadata
                         row_data = reconstruct_row_with_metadata(row, column_mapping, row_num, filename)
                         if 'email' in row_data:
                             email_results.append({
@@ -423,7 +434,6 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
                             })
                             extraction_methods["column_mapping"] += 1
                     elif '@' in cell_str:
-                        # Extract using regex from email column
                         extracted = extract_emails_by_at_symbol(cell_str)
                         for email in extracted:
                             email_results.append({
@@ -439,9 +449,13 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
                             })
                             extraction_methods["column_mapping"] += 1
 
-        # Method 2: Full scan if no emails found via column mapping
+        # Method 2: full-scan fallback — second streaming pass
         if not email_results:
-            for row_num, row in enumerate(rows[start_row:], start=start_row + 1):
+            total_rows = start_row
+            processed_rows = 0
+            for row_num, row in enumerate(_data_reader(), start=start_row + 1):
+                total_rows += 1
+                processed_rows += 1
                 for col_idx, cell in enumerate(row):
                     cell_str = str(cell).strip()
                     if is_email_like(cell_str) and ' ' not in cell_str:
@@ -474,9 +488,12 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
                             })
                             extraction_methods["full_scan"] += 1
 
-        # Method 3: @ symbol scan as final fallback
+        # Method 3: @ symbol scan — last-resort pass (materialises only when Methods 1&2 failed)
         if not email_results:
-            at_symbol_result = extract_emails_with_at_symbol(rows[start_row:], "csv")
+            at_rows = list(_data_reader())
+            total_rows = start_row + len(at_rows)
+            processed_rows = len(at_rows)
+            at_symbol_result = extract_emails_with_at_symbol(at_rows, "csv")
             for email_data in at_symbol_result["emails"]:
                 email_data["source"]["file"] = filename
                 email_results.append(email_data)
@@ -489,10 +506,6 @@ def parse_csv(file_content: Union[str, bytes], filename: str = "") -> Dict[str, 
             if result["email"] not in seen_emails:
                 seen_emails.add(result["email"])
                 unique_results.append(result)
-
-        # Calculate metrics
-        total_rows = len(rows)
-        processed_rows = len(rows) - start_row
         emails_extracted = len(unique_results)
 
         # Calculate average confidence
