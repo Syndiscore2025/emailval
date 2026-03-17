@@ -28,6 +28,7 @@ class JobTracker:
         self.jobs = {}
         if self._use_postgres():
             self._ensure_postgres_table()
+            self._bootstrap_postgres_from_json()
         else:
             self.jobs = self._load_jobs()
 
@@ -88,6 +89,27 @@ class JobTracker:
             (job_id, json.dumps(job_data)),
         )
 
+    def _postgres_has_jobs(self, cursor) -> bool:
+        cursor.execute(f"SELECT job_data FROM {self.postgres_table} LIMIT 1")
+        return cursor.fetchone() is not None
+
+    def _bootstrap_postgres_from_json(self) -> None:
+        if not self._use_postgres():
+            return
+
+        self._ensure_postgres_table()
+        jobs = self._load_jobs()
+        if not isinstance(jobs, dict) or not jobs:
+            return
+
+        with postgres_transaction() as connection:
+            with connection.cursor() as cursor:
+                if self._postgres_has_jobs(cursor):
+                    return
+                for job_id, job_data in jobs.items():
+                    if isinstance(job_data, dict):
+                        self._postgres_save_job(cursor, job_id, job_data)
+
     def _build_job_payload(self, job_id: str, total_emails: int,
                            session_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return {
@@ -130,6 +152,20 @@ class JobTracker:
         if self._use_postgres():
             return
         save_json_data_atomic(self.data_file, self.jobs)
+
+    def count_jobs(self) -> int:
+        """Return the number of persisted jobs across backends."""
+        with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(f"SELECT COUNT(*) FROM {self.postgres_table}")
+                        row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+
+            self._refresh_from_disk()
+            return len(self.jobs)
 
     def create_job(self, total_emails: int, session_info: Dict[str, Any] = None,
                    job_id: Optional[str] = None) -> str:

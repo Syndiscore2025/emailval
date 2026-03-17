@@ -98,12 +98,15 @@ class EmailTracker:
             return self._create_empty_database()
         return self._normalize_database(json.loads(raw_value))
 
-    def _postgres_fetch_database(self, cursor) -> Dict[str, Any]:
+    def _postgres_fetch_database_row(self, cursor):
         cursor.execute(
             f"SELECT state_data FROM {self.postgres_table} WHERE state_key = %s",
             (self.postgres_state_key,),
         )
-        row = cursor.fetchone()
+        return cursor.fetchone()
+
+    def _postgres_fetch_database(self, cursor) -> Dict[str, Any]:
+        row = self._postgres_fetch_database_row(cursor)
         if not row:
             return self._create_empty_database()
         return self._deserialize_state_data(row[0])
@@ -118,6 +121,19 @@ class EmailTracker:
             """,
             (self.postgres_state_key, json.dumps(state)),
         )
+
+    def _load_database_from_json(self) -> Dict[str, Any]:
+        self._ensure_data_directory()
+        data = load_json_data(self.db_file, self._create_empty_database())
+        return self._normalize_database(data)
+
+    def _has_meaningful_database(self, data: Dict[str, Any]) -> bool:
+        if not isinstance(data, dict):
+            return False
+        if data.get('emails') or data.get('sessions'):
+            return True
+        stats = data.get('stats', {})
+        return any(stats.values()) if isinstance(stats, dict) else False
     
     def _load_database(self) -> Dict[str, Any]:
         """Load the email history database"""
@@ -126,11 +142,17 @@ class EmailTracker:
                 self._ensure_postgres_table()
                 with postgres_transaction() as connection:
                     with connection.cursor() as cursor:
-                        return self._postgres_fetch_database(cursor)
+                        row = self._postgres_fetch_database_row(cursor)
+                        if row:
+                            return self._deserialize_state_data(row[0])
 
-            self._ensure_data_directory()
-            data = load_json_data(self.db_file, self._create_empty_database())
-            return self._normalize_database(data)
+                        data = self._load_database_from_json()
+                        if self._has_meaningful_database(data):
+                            self._postgres_save_database(cursor, data)
+                            return data
+                        return self._create_empty_database()
+
+            return self._load_database_from_json()
     
     def _create_empty_database(self) -> Dict[str, Any]:
         """Create an empty database structure"""

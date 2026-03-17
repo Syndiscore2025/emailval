@@ -45,7 +45,7 @@ from modules.crm_adapter import (
     validate_crm_vendor,
     INTEGRATION_CONTRACT_VERSION,
 )
-from modules.crm_config import get_crm_config_manager
+from modules.crm_config import get_crm_config_manager, has_configured_encryption_key
 from modules.lead_manager import get_lead_manager
 from modules.s3_delivery import S3Delivery, S3DeliveryError
 from modules.reporting import generate_csv_report, generate_excel_report, generate_pdf_report
@@ -1963,6 +1963,12 @@ def _build_health_checks() -> Dict[str, Dict[str, Any]]:
     checks: Dict[str, Dict[str, Any]] = {}
     data_dir = os.path.join(app.root_path, 'data')
 
+    def _get_store_count(manager, count_method_name: str, attr_name: str) -> int:
+        count_method = getattr(manager, count_method_name, None)
+        if callable(count_method):
+            return int(count_method())
+        return len(getattr(manager, attr_name, {}))
+
     exists = os.path.isdir(data_dir)
     readable = os.access(data_dir, os.R_OK) if exists else False
     writable = os.access(data_dir, os.W_OK) if exists else False
@@ -1983,25 +1989,28 @@ def _build_health_checks() -> Dict[str, Dict[str, Any]]:
         checks['api_key_store'] = {'status': 'error', 'error': str(exc)}
 
     try:
+        job_tracker = get_job_tracker()
         checks['job_tracker_store'] = {
             'status': 'ok',
-            'tracked_jobs': len(getattr(get_job_tracker(), 'jobs', {})),
+            'tracked_jobs': _get_store_count(job_tracker, 'count_jobs', 'jobs'),
         }
     except Exception as exc:
         checks['job_tracker_store'] = {'status': 'error', 'error': str(exc)}
 
     try:
+        crm_config_manager = get_crm_config_manager()
         checks['crm_config_store'] = {
             'status': 'ok',
-            'total_configs': len(getattr(get_crm_config_manager(), 'configs', {})),
+            'total_configs': _get_store_count(crm_config_manager, 'count_configs', 'configs'),
         }
     except Exception as exc:
         checks['crm_config_store'] = {'status': 'error', 'error': str(exc)}
 
     try:
+        lead_manager = get_lead_manager()
         checks['crm_upload_store'] = {
             'status': 'ok',
-            'total_uploads': len(getattr(get_lead_manager(), 'uploads', {})),
+            'total_uploads': _get_store_count(lead_manager, 'count_uploads', 'uploads'),
         }
     except Exception as exc:
         checks['crm_upload_store'] = {'status': 'error', 'error': str(exc)}
@@ -2042,9 +2051,9 @@ def _build_health_checks() -> Dict[str, Dict[str, Any]]:
         'auth_header': get_external_kpi_auth_header(),
     }
 
-    crm_key_configured = bool(os.getenv('CRM_CONFIG_ENCRYPTION_KEY'))
+    crm_key_configured = has_configured_encryption_key()
     checks['crm_encryption'] = {
-        'status': 'ok' if crm_key_configured else 'warning',
+        'status': 'ok' if crm_key_configured else ('error' if is_production_environment() else 'warning'),
         'configured': crm_key_configured,
     }
 

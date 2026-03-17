@@ -28,20 +28,53 @@ from modules.runtime_state_backend import (
 CRM_CONFIG_FILE = os.path.join('data', 'crm_configs.json')
 
 # Encryption key for AWS credentials (stored in environment variable)
-ENCRYPTION_KEY = os.getenv('CRM_CONFIG_ENCRYPTION_KEY')
+ENCRYPTION_KEY_ENV_VAR = 'CRM_CONFIG_ENCRYPTION_KEY'
+_TEMP_ENCRYPTION_KEY: Optional[bytes] = None
+_TEMP_KEY_WARNING_SHOWN = False
+
+
+def _resolve_configured_encryption_key() -> Optional[bytes]:
+    """Resolve a configured CRM encryption key in direct or legacy format."""
+    configured_key = (os.getenv(ENCRYPTION_KEY_ENV_VAR) or '').strip()
+    if not configured_key:
+        return None
+
+    direct_key = configured_key.encode()
+    try:
+        Fernet(direct_key)
+        return direct_key
+    except Exception:
+        pass
+
+    try:
+        decoded_key = base64.urlsafe_b64decode(direct_key)
+        Fernet(decoded_key)
+        return decoded_key
+    except Exception:
+        return None
+
+
+def has_configured_encryption_key() -> bool:
+    """Return whether a valid CRM encryption key is configured."""
+    return _resolve_configured_encryption_key() is not None
 
 
 def get_encryption_key() -> bytes:
     """Get or generate encryption key for AWS credentials"""
-    if ENCRYPTION_KEY:
-        return base64.urlsafe_b64decode(ENCRYPTION_KEY.encode())
-    
-    # Generate new key if not set (for development only)
-    # In production, this should be set in environment variables
-    key = Fernet.generate_key()
-    print(f"[WARNING] No CRM_CONFIG_ENCRYPTION_KEY set. Generated temporary key.")
-    print(f"[WARNING] Set this in production: CRM_CONFIG_ENCRYPTION_KEY={base64.urlsafe_b64encode(key).decode()}")
-    return key
+    global _TEMP_ENCRYPTION_KEY, _TEMP_KEY_WARNING_SHOWN
+
+    configured_key = _resolve_configured_encryption_key()
+    if configured_key is not None:
+        return configured_key
+
+    # Generate a stable in-process key if not set (for development only).
+    if _TEMP_ENCRYPTION_KEY is None:
+        _TEMP_ENCRYPTION_KEY = Fernet.generate_key()
+    if not _TEMP_KEY_WARNING_SHOWN:
+        _TEMP_KEY_WARNING_SHOWN = True
+        print("[WARNING] No valid CRM_CONFIG_ENCRYPTION_KEY set. Generated temporary key.")
+        print(f"[WARNING] Set this in production: {ENCRYPTION_KEY_ENV_VAR}={_TEMP_ENCRYPTION_KEY.decode()}")
+    return _TEMP_ENCRYPTION_KEY
 
 
 def encrypt_value(value: str) -> str:
@@ -138,16 +171,32 @@ class CRMConfigManager:
             (crm_id,),
         )
 
+    def _bootstrap_postgres_from_json(self, cursor) -> None:
+        configs = self._load_configs_from_file()
+        if not configs:
+            return
+
+        cursor.execute(f"SELECT config_data FROM {self.postgres_table} LIMIT 1")
+        if cursor.fetchone() is not None:
+            return
+
+        for crm_id, config in configs.items():
+            if isinstance(config, dict):
+                self._postgres_save_config(cursor, crm_id, config)
+
     # ------------------------------------------------------------------
     # JSON helpers
     # ------------------------------------------------------------------
+
+    def _load_configs_from_file(self) -> Dict[str, Any]:
+        data = load_json_data(self.config_file, self._empty_configs())
+        return data if isinstance(data, dict) else self._empty_configs()
 
     def _load_configs(self) -> Dict[str, Any]:
         """Load CRM configurations from file (no-op for Postgres path)"""
         if self._use_postgres():
             return {}
-        data = load_json_data(self.config_file, self._empty_configs())
-        return data if isinstance(data, dict) else self._empty_configs()
+        return self._load_configs_from_file()
 
     def _refresh_from_disk(self):
         self.configs = self._load_configs()
@@ -155,6 +204,22 @@ class CRMConfigManager:
     def _save_configs(self):
         """Save CRM configurations to file"""
         save_json_data_atomic(self.config_file, self.configs)
+
+    def count_configs(self) -> int:
+        """Return the number of persisted CRM configs across backends."""
+        if self._use_postgres():
+            with self.lock:
+                with postgres_transaction() as conn:
+                    with conn.cursor() as cursor:
+                        self._ensure_postgres_table(cursor)
+                        self._bootstrap_postgres_from_json(cursor)
+                        cursor.execute(f"SELECT COUNT(*) FROM {self.postgres_table}")
+                        row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        with self.lock:
+            self._refresh_from_disk()
+            return len(self.configs)
     
     def _decrypt_config_for_return(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Decrypt AWS credentials in a config copy before returning."""
@@ -174,6 +239,7 @@ class CRMConfigManager:
                 with postgres_transaction() as conn:
                     with conn.cursor() as cursor:
                         self._ensure_postgres_table(cursor)
+                        self._bootstrap_postgres_from_json(cursor)
                         config = self._postgres_fetch_config(cursor, crm_id)
             if not config:
                 return None
@@ -214,6 +280,7 @@ class CRMConfigManager:
                 with postgres_transaction() as conn:
                     with conn.cursor() as cursor:
                         self._ensure_postgres_table(cursor)
+                        self._bootstrap_postgres_from_json(cursor)
                         self._postgres_save_config(cursor, crm_id, config)
             return self.get_config(crm_id)
 
@@ -243,6 +310,7 @@ class CRMConfigManager:
                 with postgres_transaction() as conn:
                     with conn.cursor() as cursor:
                         self._ensure_postgres_table(cursor)
+                        self._bootstrap_postgres_from_json(cursor)
                         config = self._postgres_fetch_config(cursor, crm_id)
                         if config is None:
                             return None
@@ -278,6 +346,7 @@ class CRMConfigManager:
                 with postgres_transaction() as conn:
                     with conn.cursor() as cursor:
                         self._ensure_postgres_table(cursor)
+                        self._bootstrap_postgres_from_json(cursor)
                         existing = self._postgres_fetch_config(cursor, crm_id)
                         if existing is None:
                             return False

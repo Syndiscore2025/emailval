@@ -59,6 +59,7 @@ class APIKeyManager:
         self.data = self._empty_data()
         if self._use_postgres():
             self._ensure_postgres_table()
+            self._bootstrap_postgres_from_json()
         else:
             self.data = self._load()
 
@@ -155,6 +156,28 @@ class APIKeyManager:
             """,
             (key_id, key_data.get('key_hash'), json.dumps(key_data)),
         )
+
+    def _postgres_has_keys(self, cursor) -> bool:
+        cursor.execute(f"SELECT key_id, key_data FROM {self.postgres_table} LIMIT 1")
+        return cursor.fetchone() is not None
+
+    def _bootstrap_postgres_from_json(self) -> None:
+        if not self._use_postgres():
+            return
+
+        self._ensure_postgres_table()
+        data = self._load()
+        json_keys = data.get('keys', {}) if isinstance(data, dict) else {}
+        if not isinstance(json_keys, dict) or not json_keys:
+            return
+
+        with postgres_transaction() as connection:
+            with connection.cursor() as cursor:
+                if self._postgres_has_keys(cursor):
+                    return
+                for key_id, key_data in json_keys.items():
+                    if isinstance(key_data, dict):
+                        self._postgres_upsert_key(cursor, key_id, key_data)
 
     @property
     def keys(self) -> Dict[str, Dict[str, Any]]:

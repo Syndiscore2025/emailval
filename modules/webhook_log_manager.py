@@ -59,11 +59,7 @@ class WebhookLogManager:
         self._postgres_table_ready = True
 
     def _postgres_fetch_data(self, cursor) -> Dict[str, Any]:
-        cursor.execute(
-            f"SELECT state_data FROM {self.postgres_table} WHERE state_key = %s",
-            (_WEBHOOK_STATE_KEY,),
-        )
-        row = cursor.fetchone()
+        row = self._postgres_fetch_data_row(cursor)
         if not row:
             return self._empty_data()
         try:
@@ -74,6 +70,13 @@ class WebhookLogManager:
             return data if isinstance(data, dict) else self._empty_data()
         except Exception:
             return self._empty_data()
+
+    def _postgres_fetch_data_row(self, cursor):
+        cursor.execute(
+            f"SELECT state_data FROM {self.postgres_table} WHERE state_key = %s",
+            (_WEBHOOK_STATE_KEY,),
+        )
+        return cursor.fetchone()
 
     def _postgres_save_data(self, cursor) -> None:
         cursor.execute(
@@ -86,6 +89,19 @@ class WebhookLogManager:
             (_WEBHOOK_STATE_KEY, json.dumps(self.data)),
         )
 
+    def _load_data_from_json(self) -> Dict[str, Any]:
+        data = load_json_data(self.data_file, self._empty_data())
+        return data if isinstance(data, dict) else self._empty_data()
+
+    def _has_meaningful_data(self, data: Dict[str, Any]) -> bool:
+        if not isinstance(data, dict):
+            return False
+        return bool(
+            data.get('events')
+            or data.get('idempotency_keys')
+            or data.get('external_deliveries')
+        )
+
     # ------------------------------------------------------------------
     # JSON helpers
     # ------------------------------------------------------------------
@@ -95,9 +111,17 @@ class WebhookLogManager:
             with postgres_transaction() as conn:
                 with conn.cursor() as cursor:
                     self._ensure_postgres_table(cursor)
-                    return self._postgres_fetch_data(cursor)
-        data = load_json_data(self.data_file, self._empty_data())
-        return data if isinstance(data, dict) else self._empty_data()
+                    row = self._postgres_fetch_data_row(cursor)
+                    if row:
+                        return self._postgres_fetch_data(cursor)
+
+                    data = self._load_data_from_json()
+                    if self._has_meaningful_data(data):
+                        self.data = data
+                        self._postgres_save_data(cursor)
+                        return data
+                    return self._empty_data()
+        return self._load_data_from_json()
 
     def _refresh_from_disk(self):
         if os.path.exists(self.data_file):

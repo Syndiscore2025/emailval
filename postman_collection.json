@@ -5,9 +5,9 @@
     "description": "Full API collection for the emailval Email Validation service. Set the {{base_url}} and {{api_key}} collection variables before running."
   },
   "variable": [
-    { "key": "base_url", "value": "https://your-domain.com", "type": "string" },
-    { "key": "api_key", "value": "your-api-key-here", "type": "string" },
-    { "key": "admin_token", "value": "your-admin-api-token", "type": "string" },
+    { "key": "base_url", "value": "https://emailval-gpru.onrender.com", "type": "string" },
+    { "key": "api_key", "value": "ev_sEfPaJjzQ6uQAuOkMUVnjP1mVkQUJYnDibKzfhpjW-s", "type": "string" },
+    { "key": "admin_token", "value": "223605f5c360c81195f026a815017c2c862808f4115f5ce98e42ecb68885e2cd", "type": "string" },
     { "key": "crm_id", "value": "switchbox_prod", "type": "string" },
     { "key": "upload_id", "value": "", "type": "string" },
     { "key": "job_id", "value": "", "type": "string" }

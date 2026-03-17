@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -30,8 +31,18 @@ class DummyTracker:
 
 
 class DummyStateManager:
-    def __init__(self, items_name, items=None):
+    def __init__(self, items_name, items=None, persisted_count=None):
         setattr(self, items_name, items or {})
+        self._persisted_count = persisted_count
+
+    def count_jobs(self):
+        return self._persisted_count if self._persisted_count is not None else len(getattr(self, 'jobs', {}))
+
+    def count_configs(self):
+        return self._persisted_count if self._persisted_count is not None else len(getattr(self, 'configs', {}))
+
+    def count_uploads(self):
+        return self._persisted_count if self._persisted_count is not None else len(getattr(self, 'uploads', {}))
 
 
 class DummyOutboundWorker:
@@ -133,12 +144,21 @@ class FakeRuntimeStateCursor:
             ]
             return
 
+        if normalized.startswith('select count(*) from'):
+            table_name = normalized.split('select count(*) from ', 1)[1].split(' ', 1)[0].rstrip(';')
+            table = self.store.setdefault(table_name, {})
+            self._results = [(len(table),)]
+            return
+
         if normalized.startswith('select job_data from'):
             table_name = normalized.split('select job_data from ', 1)[1].split(' ', 1)[0]
             table = self.store.setdefault(table_name, {})
-            job_id = params[0]
-            record = table.get(job_id)
-            self._results = [(record.get('job_data'),)] if record else []
+            if 'where job_id = %s' in normalized:
+                job_id = params[0]
+                record = table.get(job_id)
+                self._results = [(record.get('job_data'),)] if record else []
+            else:
+                self._results = [(record.get('job_data'),) for record in table.values()]
             return
 
         if normalized.startswith('select state_data from'):
@@ -166,9 +186,12 @@ class FakeRuntimeStateCursor:
             remainder = normalized.split('select config_data from ', 1)[1]
             table_name = remainder.split(' ', 1)[0].rstrip(';')
             table = self.store.setdefault(table_name, {})
-            crm_id = params[0]
-            record = table.get(crm_id)
-            self._results = [(record.get('config_data'),)] if record else []
+            if 'where crm_id = %s' in normalized:
+                crm_id = params[0]
+                record = table.get(crm_id)
+                self._results = [(record.get('config_data'),)] if record else []
+            else:
+                self._results = [(record.get('config_data'),) for record in table.values()]
             return
 
         raise AssertionError(f'Unsupported query: {query}')
@@ -758,15 +781,15 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
     def test_health_endpoint_includes_runtime_checks_and_stays_200(self):
         os.environ['SECRET_KEY'] = 'test-safe-secret-key-not-a-placeholder'
         os.environ['ADMIN_PASSWORD'] = 'test-safe-admin-password'
-        os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = 'configured-key'
+        os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
         outbound_worker = DummyOutboundWorker()
         validation_worker = DummyValidationWorker()
 
         with patch.dict(app_module.app.config, {'SECRET_KEY': 'test-safe-secret-key-not-a-placeholder'}, clear=False), \
              patch.object(app_module, 'get_key_manager', return_value=MagicMock(list_keys=MagicMock(return_value=[]))), \
-             patch.object(app_module, 'get_job_tracker', return_value=DummyStateManager('jobs')), \
-             patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs')), \
-             patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads')), \
+             patch.object(app_module, 'get_job_tracker', return_value=DummyStateManager('jobs', items={}, persisted_count=4)), \
+             patch.object(app_module, 'get_crm_config_manager', return_value=DummyStateManager('configs', items={}, persisted_count=3)), \
+             patch.object(app_module, 'get_lead_manager', return_value=DummyStateManager('uploads', items={}, persisted_count=2)), \
              patch.object(app_module, 'get_webhook_log_manager', return_value=self.webhook_log_manager), \
              patch.object(app_module, 'get_outbound_delivery_worker', return_value=outbound_worker), \
              patch.object(app_module, 'get_validation_worker', return_value=validation_worker):
@@ -779,6 +802,9 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertIn('checks', payload)
         self.assertIn('uptime_seconds', payload)
         self.assertEqual(payload['checks']['api_key_store']['status'], 'ok')
+        self.assertEqual(payload['checks']['job_tracker_store']['tracked_jobs'], 4)
+        self.assertEqual(payload['checks']['crm_config_store']['total_configs'], 3)
+        self.assertEqual(payload['checks']['crm_upload_store']['total_uploads'], 2)
         self.assertEqual(payload['checks']['outbound_delivery']['queue_capacity'], 500)
         self.assertEqual(payload['checks']['validation_worker']['queue_capacity'], 500)
         self.assertEqual(payload['checks']['crm_encryption']['status'], 'ok')
@@ -789,7 +815,7 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
     def test_ready_endpoint_returns_503_for_misconfigured_external_kpi(self):
         os.environ['SECRET_KEY'] = 'test-safe-secret-key-not-a-placeholder'
         os.environ['ADMIN_PASSWORD'] = 'test-safe-admin-password'
-        os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = 'configured-key'
+        os.environ['CRM_CONFIG_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
         os.environ['EXTERNAL_KPI_ENABLED'] = 'true'
         os.environ.pop('EXTERNAL_KPI_EVENT_URL', None)
         os.environ.pop('EXTERNAL_KPI_API_KEY', None)
@@ -817,6 +843,7 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
 
     def test_ready_endpoint_returns_503_for_missing_production_secrets(self):
         os.environ.pop('ADMIN_PASSWORD', None)
+        os.environ.pop('CRM_CONFIG_ENCRYPTION_KEY', None)
         worker = DummyOutboundWorker()
         missing_creds_path = os.path.join(self.temp_dir.name, 'no_admin_creds.json')
 
@@ -837,8 +864,36 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload['checks']['secret_key']['status'], 'error')
         self.assertEqual(payload['checks']['admin_auth']['status'], 'error')
+        self.assertEqual(payload['checks']['crm_encryption']['status'], 'error')
         self.assertIn('secret_key', payload['failures'])
         self.assertIn('admin_auth', payload['failures'])
+        self.assertIn('crm_encryption', payload['failures'])
+
+    def test_crm_config_get_encryption_key_accepts_direct_and_legacy_formats(self):
+        direct_key = Fernet.generate_key()
+        legacy_key = base64.urlsafe_b64encode(direct_key).decode()
+
+        with patch.dict(os.environ, {'CRM_CONFIG_ENCRYPTION_KEY': direct_key.decode()}, clear=False):
+            encrypted = crm_config_module.encrypt_value('top-secret')
+            self.assertEqual(crm_config_module.get_encryption_key(), direct_key)
+            self.assertEqual(crm_config_module.decrypt_value(encrypted), 'top-secret')
+
+        with patch.dict(os.environ, {'CRM_CONFIG_ENCRYPTION_KEY': legacy_key}, clear=False):
+            encrypted = crm_config_module.encrypt_value('top-secret-legacy')
+            self.assertEqual(crm_config_module.get_encryption_key(), direct_key)
+            self.assertEqual(crm_config_module.decrypt_value(encrypted), 'top-secret-legacy')
+
+    def test_crm_config_get_encryption_key_reuses_temporary_key_when_unset(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(crm_config_module, '_TEMP_ENCRYPTION_KEY', None), \
+             patch.object(crm_config_module, '_TEMP_KEY_WARNING_SHOWN', False):
+            first_key = crm_config_module.get_encryption_key()
+            second_key = crm_config_module.get_encryption_key()
+            encrypted = crm_config_module.encrypt_value('dev-secret')
+            decrypted = crm_config_module.decrypt_value(encrypted)
+
+        self.assertEqual(first_key, second_key)
+        self.assertEqual(decrypted, 'dev-secret')
 
     def test_error_responses_include_request_id_header_and_payload(self):
         client = app_module.app.test_client()
@@ -1096,6 +1151,235 @@ class EnterpriseIntegrationContractTests(unittest.TestCase):
         self.assertTrue(updated['settings']['auto_validate'])
         self.assertTrue(deleted)
         self.assertIsNone(missing)
+
+    def test_api_key_manager_bootstraps_json_state_into_postgres(self):
+        db_file = os.path.join(self.temp_dir.name, 'api_keys_bootstrap.json')
+        with open(db_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'keys': {
+                    'ak_existing': {
+                        'key_hash': 'existing-hash',
+                        'name': 'Existing Key',
+                        'created_at': '2026-03-17T00:00:00',
+                        'active': True,
+                        'rate_limit_per_minute': 25,
+                        'usage_total': 7,
+                        'window_start': None,
+                        'window_count': 0,
+                    }
+                }
+            }, handle)
+
+        with patch.object(api_auth, 'use_postgres_runtime_state', return_value=True), \
+             patch.object(api_auth, 'postgres_transaction', self._fake_postgres_transaction), \
+             patch.object(api_auth, 'get_runtime_state_table_name', return_value='emailval_api_keys'):
+            manager = api_auth.APIKeyManager(db_file=db_file)
+            listed = manager.list_keys()
+            usage = manager.get_usage('ak_existing')
+
+        self.assertEqual({item['key_id'] for item in listed}, {'ak_existing'})
+        self.assertEqual(usage['rate_limit_per_minute'], 25)
+        self.assertEqual(usage['usage_total'], 7)
+        self.assertIn('ak_existing', self.fake_postgres_store['emailval_api_keys'])
+
+    def test_job_tracker_bootstraps_json_state_into_postgres(self):
+        jobs_file = os.path.join(self.temp_dir.name, 'validation_jobs_bootstrap.json')
+        with open(jobs_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'job_existing': {
+                    'job_id': 'job_existing',
+                    'status': 'running',
+                    'total_emails': 100,
+                    'validated_count': 40,
+                    'valid_count': 35,
+                    'invalid_count': 5,
+                    'disposable_count': 0,
+                    'role_based_count': 2,
+                    'personal_count': 33,
+                    'started_at': '2026-03-17T00:00:00',
+                    'completed_at': None,
+                    'session_info': {'source': 'bootstrap'},
+                    'webhook_url': None,
+                    'error': None,
+                }
+            }, handle)
+
+        with patch('modules.job_tracker.use_postgres_runtime_state', return_value=True), \
+             patch('modules.job_tracker.postgres_transaction', self._fake_postgres_transaction), \
+             patch('modules.job_tracker.get_runtime_state_table_name', return_value='emailval_validation_jobs'):
+            tracker = JobTracker(data_file=jobs_file)
+            job = tracker.get_job('job_existing')
+
+        self.assertIsNotNone(job)
+        self.assertEqual(job['status'], 'running')
+        self.assertEqual(job['validated_count'], 40)
+        self.assertIn('job_existing', self.fake_postgres_store['emailval_validation_jobs'])
+
+    def test_job_tracker_count_jobs_uses_postgres_state(self):
+        with patch('modules.job_tracker.use_postgres_runtime_state', return_value=True), \
+             patch('modules.job_tracker.postgres_transaction', self._fake_postgres_transaction), \
+             patch('modules.job_tracker.get_runtime_state_table_name', return_value='emailval_validation_jobs'):
+            tracker = JobTracker(data_file=os.path.join(self.temp_dir.name, 'validation_jobs.json'))
+            tracker.create_job(total_emails=5, job_id='job_pg_count_1')
+            tracker.create_job(total_emails=7, job_id='job_pg_count_2')
+
+            self.assertEqual(tracker.count_jobs(), 2)
+
+    def test_email_tracker_bootstraps_json_state_into_postgres(self):
+        db_file = os.path.join(self.temp_dir.name, 'email_history_bootstrap.json')
+        with open(db_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'emails': {
+                    'existing@example.com': {
+                        'first_seen': '2026-03-17T00:00:00',
+                        'last_seen': '2026-03-17T00:10:00',
+                        'send_count': 2,
+                        'validation_count': 2,
+                        'valid': True,
+                        'type': 'personal',
+                        'is_disposable': False,
+                        'is_role_based': False,
+                        'last_validated': '2026-03-17T00:10:00',
+                        'status': 'valid',
+                    }
+                },
+                'sessions': [{'source': 'bootstrap'}],
+                'stats': {
+                    'total_emails_tracked': 1,
+                    'total_uploads': 1,
+                    'total_duplicates_prevented': 0,
+                }
+            }, handle)
+
+        with patch('modules.email_tracker.use_postgres_runtime_state', return_value=True), \
+             patch('modules.email_tracker.postgres_transaction', self._fake_postgres_transaction), \
+             patch('modules.email_tracker.get_runtime_state_table_name', return_value='emailval_email_history'):
+            tracker = EmailTracker(db_file=db_file)
+            tracked = tracker.get_email('existing@example.com')
+            stats = tracker.get_stats()
+
+        self.assertIsNotNone(tracked)
+        self.assertTrue(tracked['valid'])
+        self.assertEqual(stats['total_unique_emails'], 1)
+        self.assertEqual(stats['total_upload_sessions'], 1)
+        self.assertIn('default', self.fake_postgres_store['emailval_email_history'])
+
+    def test_lead_manager_bootstraps_json_state_into_postgres(self):
+        uploads_file = os.path.join(self.temp_dir.name, 'crm_uploads_bootstrap.json')
+        with open(uploads_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'upl_existing': {
+                    'upload_id': 'upl_existing',
+                    'crm_id': 'crm-bootstrap',
+                    'crm_vendor': 'switchbox',
+                    'validation_mode': 'manual',
+                    'status': 'pending_validation',
+                    'email_count': 1,
+                    'emails': ['existing-lead@example.com'],
+                    'crm_context': [],
+                    'settings': {},
+                    'job_id': None,
+                    'results': None,
+                    's3_delivery': None,
+                    'created_at': '2026-03-17T00:00:00',
+                    'updated_at': '2026-03-17T00:00:00',
+                    'validated_at': None,
+                }
+            }, handle)
+
+        with patch('modules.lead_manager.use_postgres_runtime_state', return_value=True), \
+             patch('modules.lead_manager.postgres_transaction', self._fake_postgres_transaction), \
+             patch('modules.lead_manager.get_runtime_state_table_name', return_value='emailval_crm_uploads'):
+            manager = LeadManager(uploads_file=uploads_file)
+            upload = manager.get_upload('upl_existing')
+            uploads = manager.get_uploads_by_crm('crm-bootstrap')
+
+        self.assertIsNotNone(upload)
+        self.assertEqual(upload['emails'], ['existing-lead@example.com'])
+        self.assertEqual(len(uploads), 1)
+        self.assertIn('upl_existing', self.fake_postgres_store['emailval_crm_uploads'])
+
+    def test_lead_manager_count_uploads_uses_postgres_state(self):
+        with patch('modules.lead_manager.use_postgres_runtime_state', return_value=True), \
+             patch('modules.lead_manager.postgres_transaction', self._fake_postgres_transaction), \
+             patch('modules.lead_manager.get_runtime_state_table_name', return_value='emailval_crm_uploads'):
+            manager = LeadManager(uploads_file=os.path.join(self.temp_dir.name, 'crm_uploads.json'))
+            manager.create_upload('crm-1', 'switchbox', ['one@example.com'], [])
+            manager.create_upload('crm-1', 'switchbox', ['two@example.com'], [])
+
+            self.assertEqual(manager.count_uploads(), 2)
+
+    def test_webhook_log_manager_bootstraps_json_state_into_postgres(self):
+        os.environ['RUNTIME_STATE_BACKEND'] = 'postgres'
+        logs_file = os.path.join(self.temp_dir.name, 'wh_bootstrap.json')
+        with open(logs_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'events': [{
+                    'event_id': 'wh_existing',
+                    'timestamp': '2026-03-17T00:00:00',
+                    'event_type': 'webhook_received',
+                    'status': 'received',
+                }],
+                'idempotency_keys': {
+                    'idem-existing': {
+                        'idempotency_key': 'idem-existing',
+                        'request_hash': 'hash-existing',
+                        'response_status': 200,
+                        'response_body': {'ok': True},
+                        'response_headers': {},
+                        'stored_at': '2026-03-17T00:00:00',
+                    }
+                },
+                'external_deliveries': {},
+            }, handle)
+
+        with patch('modules.webhook_log_manager.postgres_transaction', self._fake_postgres_transaction):
+            manager = WebhookLogManager(logs_file)
+            events = manager.get_events()
+            idem = manager.get_idempotent_response('idem-existing')
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['event_id'], 'wh_existing')
+        self.assertEqual(idem['response_status'], 200)
+        self.assertIn('emailval_webhook_logs', self.fake_postgres_store)
+
+    def test_crm_config_manager_bootstraps_json_state_into_postgres(self):
+        os.environ['RUNTIME_STATE_BACKEND'] = 'postgres'
+        config_file = os.path.join(self.temp_dir.name, 'crm_bootstrap.json')
+        with open(config_file, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'crm-existing': {
+                    'crm_id': 'crm-existing',
+                    'crm_vendor': 'salesforce',
+                    'api_key': None,
+                    'settings': {},
+                    'premium_features': {'auto_validate': False},
+                    'created_at': '2026-03-17T00:00:00',
+                    'updated_at': '2026-03-17T00:00:00',
+                }
+            }, handle)
+
+        manager = crm_config_module.CRMConfigManager(config_file=config_file)
+        with patch('modules.crm_config.postgres_transaction', self._fake_postgres_transaction):
+            fetched = manager.get_config('crm-existing')
+
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched['crm_vendor'], 'salesforce')
+        self.assertIn('emailval_crm_configs', self.fake_postgres_store)
+        self.assertIn('crm-existing', self.fake_postgres_store['emailval_crm_configs'])
+
+    def test_crm_config_manager_count_configs_uses_postgres_state(self):
+        os.environ['RUNTIME_STATE_BACKEND'] = 'postgres'
+        config_file = os.path.join(self.temp_dir.name, 'crm_counts.json')
+        stable_key = Fernet.generate_key()
+        manager = crm_config_module.CRMConfigManager(config_file=config_file)
+
+        with patch('modules.crm_config.postgres_transaction', self._fake_postgres_transaction), \
+             patch.object(crm_config_module, 'get_encryption_key', return_value=stable_key):
+            manager.create_config('crm-count-1', {'crm_vendor': 'switchbox'})
+            manager.create_config('crm-count-2', {'crm_vendor': 'hubspot'})
+
+            self.assertEqual(manager.count_configs(), 2)
 
 
 if __name__ == '__main__':

@@ -39,6 +39,7 @@ class LeadManager:
         self.uploads: Dict[str, Any] = {}
         if self._use_postgres():
             self._ensure_postgres_table()
+            self._bootstrap_postgres_from_json()
         else:
             self.uploads = self._load_uploads()
 
@@ -59,6 +60,20 @@ class LeadManager:
     def _save_uploads(self):
         """Save uploads to file"""
         save_json_data_atomic(self.uploads_file, self.uploads)
+
+    def count_uploads(self) -> int:
+        """Return the number of persisted uploads across backends."""
+        with self.lock:
+            if self._use_postgres():
+                self._ensure_postgres_table()
+                with postgres_transaction() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(f"SELECT COUNT(*) FROM {self.postgres_table}")
+                        row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+
+            self._refresh_from_disk()
+            return len(self.uploads)
 
     def _ensure_postgres_table(self) -> None:
         if not self._use_postgres() or self._postgres_table_ready:
@@ -105,6 +120,27 @@ class LeadManager:
             """,
             (upload_id, json.dumps(upload_data)),
         )
+
+    def _postgres_has_uploads(self, cursor) -> bool:
+        cursor.execute(f"SELECT upload_data FROM {self.postgres_table} LIMIT 1")
+        return cursor.fetchone() is not None
+
+    def _bootstrap_postgres_from_json(self) -> None:
+        if not self._use_postgres():
+            return
+
+        self._ensure_postgres_table()
+        uploads = self._load_uploads()
+        if not isinstance(uploads, dict) or not uploads:
+            return
+
+        with postgres_transaction() as connection:
+            with connection.cursor() as cursor:
+                if self._postgres_has_uploads(cursor):
+                    return
+                for upload_id, upload_data in uploads.items():
+                    if isinstance(upload_data, dict):
+                        self._postgres_save_upload(cursor, upload_id, upload_data)
     
     def create_upload(
         self,
