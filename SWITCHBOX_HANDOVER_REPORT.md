@@ -13,6 +13,37 @@ This document is the **reference and operations handoff** for the `emailval` Ema
 
 ---
 
+## What this service does
+
+`emailval` validates email addresses before they enter the contact center. It runs a multi-layer check pipeline and returns a verdict for each address so Switchbox knows whether to contact a lead, hold it, or suppress it.
+
+### Validation checks (in order)
+
+| Check | What it does |
+|---|---|
+| **Format** | Confirms the address passes RFC 5321 syntax rules |
+| **MX / DNS** | Confirms the domain has mail exchange records — the domain can actually receive email |
+| **Disposable detection** | Flags addresses from known throwaway providers (e.g. mailinator, guerrillamail) |
+| **Role-based detection** | Flags generic inbox addresses (e.g. `info@`, `support@`, `noreply@`) — not tied to a real person |
+| **Catchall detection** | Tests whether the domain accepts mail for any address — a clean SMTP result may be a false positive |
+| **SMTP verification** | Opens a real SMTP handshake with the receiving mail server to confirm the mailbox exists |
+
+### Verdicts
+
+| Verdict | Meaning | Recommended action |
+|---|---|---|
+| `clean` | Passed all checks — real, reachable, personal mailbox | Contact freely |
+| `catchall` | Domain accepts any address — deliverability unconfirmed | Use with caution; A/B test deliverability |
+| `role_based` | Generic inbox, not a named person | Low-priority outreach; unlikely to convert |
+| `disposable` | Throwaway address — intentionally untraceable | Suppress; flag lead for review |
+| `invalid` | Failed format, DNS, or SMTP — address does not exist or cannot receive mail | Suppress from all outreach |
+
+### Multi-email per lead record
+
+A single lead row can carry 2–4 email addresses (e.g. `email`, `email2`, `email3`). The service validates all of them and returns a `records_by_id` grouping in the results so Switchbox can pick the best usable address per lead rather than suppressing the whole record because one email failed.
+
+---
+
 ## Authentication
 
 All API endpoints require an API key passed in the `X-API-Key` header.
