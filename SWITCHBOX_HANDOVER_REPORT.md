@@ -15,32 +15,85 @@ This document is the **reference and operations handoff** for the `emailval` Ema
 
 ## What this service does
 
-`emailval` validates email addresses before they enter the contact center. It runs a multi-layer check pipeline and returns a verdict for each address so Switchbox knows whether to contact a lead, hold it, or suppress it.
+`emailval` validates email addresses before they enter the contact center. It runs a six-stage pipeline against every address and returns a machine-readable verdict so Switchbox knows whether to contact a lead, hold it, or suppress it entirely.
 
-### Validation checks (in order)
+### Validation pipeline (executed in order)
 
-| Check | What it does |
-|---|---|
-| **Format** | Confirms the address passes RFC 5321 syntax rules |
-| **MX / DNS** | Confirms the domain has mail exchange records — the domain can actually receive email |
-| **Disposable detection** | Flags addresses from known throwaway providers (e.g. mailinator, guerrillamail) |
-| **Role-based detection** | Flags generic inbox addresses (e.g. `info@`, `support@`, `noreply@`) — not tied to a real person |
-| **Catchall detection** | Tests whether the domain accepts mail for any address — a clean SMTP result may be a false positive |
-| **SMTP verification** | Opens a real SMTP handshake with the receiving mail server to confirm the mailbox exists |
+**Stage 1 — Syntax (RFC 5321 / 5322)**
+
+Checks structure before any network call is made. Rejects if:
+- No `@` symbol, or more than one `@`
+- Local part (before `@`) is empty or exceeds 64 characters
+- Domain part (after `@`) is empty, exceeds 255 characters, has no dot, starts/ends with a dot, or contains consecutive dots
+- Full address exceeds 320 characters
+- Address fails the RFC 5322 regex pattern
+
+Syntax failures are terminal — no further checks run.
+
+**Stage 2 — DNS / MX record lookup**
+
+Performs a live DNS query for MX records on the domain. Falls back to A records if no MX records are found. Results are cached per domain within a job run so bulk lists with many shared domains (e.g. `gmail.com`) only hit DNS once. Fails if: domain does not exist (NXDOMAIN), no nameservers respond, or DNS times out. DNS failures are terminal.
+
+**Stage 3 — Disposable domain detection**
+
+Compares the domain against a hardcoded blocklist of ~35 known throwaway providers. Current list includes: `mailinator.com`, `guerrillamail.com`, `tempmail.com`, `yopmail.com`, `trashmail.com`, `maildrop.cc`, `burnermail.io`, and ~27 others. Detection is exact-match on the domain part — subdomains are not checked. A disposable flag does **not** stop further checks; the address may still be syntactically valid.
+
+**Stage 4 — Role-based prefix detection**
+
+Compares the local part (before `@`) against a hardcoded set of ~40 generic inbox prefixes. Current set includes: `admin`, `info`, `support`, `sales`, `contact`, `help`, `noreply`, `no-reply`, `donotreply`, `billing`, `marketing`, `hr`, `jobs`, `careers`, `legal`, `security`, `abuse`, `notifications`, `team`, `webmaster`, `postmaster`, and others. Detection is exact case-insensitive match — `Info@` and `INFO@` both match. Role-based flag does **not** stop further checks.
+
+**Stage 5 — Catch-all domain detection** *(requires `SMTP_ENABLED=true`)*
+
+Probes the MX server with `RCPT TO` commands for 2 randomly generated addresses that are statistically impossible to exist (e.g. `xq7k2mz9@domain.com`). If the server accepts both → domain is definitively catch-all (`confidence: high`). If one is accepted → likely catch-all (`confidence: medium`). If both are rejected → not catch-all (`confidence: high`). A catch-all domain means the SMTP result for the real address cannot be trusted.
+
+**Stage 6 — SMTP mailbox verification** *(requires `SMTP_ENABLED=true`)*
+
+Connects to the highest-priority MX host, issues `HELO` + `MAIL FROM: noreply@validator.local` + `RCPT TO: <target>`. A `250` or `251` response confirms the mailbox exists. Any other code (e.g. `550 No such user`) marks the mailbox as non-existent. SMTP is skipped if DNS already failed. If the server disconnects, times out, or refuses the connection, the check is marked `skipped` and the address is treated as unverifiable (not marked invalid — the pipeline fails open to avoid false suppression).
+
+If an address fails on the first SMTP pass, the pipeline runs a **second pass** automatically. If the second pass also fails, the address is flagged as `disposable` in addition to `invalid`.
 
 ### Verdicts
 
-| Verdict | Meaning | Recommended action |
+| Verdict | How it is assigned | Recommended action |
 |---|---|---|
-| `clean` | Passed all checks — real, reachable, personal mailbox | Contact freely |
-| `catchall` | Domain accepts any address — deliverability unconfirmed | Use with caution; A/B test deliverability |
-| `role_based` | Generic inbox, not a named person | Low-priority outreach; unlikely to convert |
-| `disposable` | Throwaway address — intentionally untraceable | Suppress; flag lead for review |
-| `invalid` | Failed format, DNS, or SMTP — address does not exist or cannot receive mail | Suppress from all outreach |
+| `clean` | Passed syntax + DNS; not disposable; not role-based; SMTP confirmed mailbox exists (or SMTP skipped/disabled) | Contact freely |
+| `catchall` | Passed syntax + DNS; SMTP accepted the address, but catch-all probe confirmed the domain accepts anything | Proceed with caution — deliverability unconfirmed |
+| `role_based` | Passed syntax + DNS; local part matched a role-based prefix | Low-priority outreach — not tied to a named person |
+| `disposable` | Domain matched disposable blocklist, or address failed SMTP twice | Suppress — intentionally untraceable or non-existent |
+| `invalid` | Failed syntax, DNS, or SMTP `RCPT TO` returned a rejection code | Suppress from all outreach |
+
+### Per-email `checks` object
+
+Every validated email returns a `checks` object with three sub-objects:
+
+```json
+{
+  "checks": {
+    "type": {
+      "email_type": "personal | role | disposable",
+      "is_disposable": false,
+      "is_role_based": false
+    },
+    "smtp": {
+      "valid": true,
+      "mailbox_exists": true,
+      "smtp_response": "mail.example.com | RCPT: 250 OK",
+      "skipped": false,
+      "errors": []
+    },
+    "catchall": {
+      "is_catchall": false,
+      "confidence": "high | medium | low"
+    }
+  }
+}
+```
 
 ### Multi-email per lead record
 
-A single lead row can carry 2–4 email addresses (e.g. `email`, `email2`, `email3`). The service validates all of them and returns a `records_by_id` grouping in the results so Switchbox can pick the best usable address per lead rather than suppressing the whole record because one email failed.
+A single lead row can carry 2–4 email addresses. Pass them as an `emails` array inside each `crm_context` item. The service validates all of them and returns a `records_by_id` grouping so Switchbox can pick the best usable address per lead rather than suppressing the whole record because one address failed.
+
+The verdict hierarchy used to select `best_email` is: `clean` > `catchall` > `role_based` > `disposable` > `invalid`.
 
 ---
 
