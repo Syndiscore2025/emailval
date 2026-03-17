@@ -363,7 +363,8 @@ After a bulk upload completes, results are segregated by disposition:
 ```json
 {
   "upload_id": "upl_abc123",
-  "summary": { "total": 100, "clean": 82, "catchall": 6, "invalid": 10, "disposable": 2, "record_count": 50 },
+  "event": "validation.completed",
+  "summary": { "total": 100, "clean": 80, "catchall": 6, "invalid": 10, "disposable": 2, "role_based": 2, "valid": 88, "record_count": 50 },
   "lists": {
     "clean": [
       { "crm_record_id": "rec_001", "email": "alice@acme.com", "status": "valid", "is_catchall": false }
@@ -372,7 +373,8 @@ After a bulk upload completes, results are segregated by disposition:
       { "crm_record_id": "rec_042", "email": "bad@nowhere.xyz", "status": "invalid", "errors": ["domain_not_found"] }
     ],
     "catchall": [],
-    "disposable": []
+    "disposable": [],
+    "role_based": []
   },
   "contract": { "version": "v1", "response_format": "segregated", "change_policy": "additive" }
 }
@@ -418,6 +420,7 @@ When `crm_context` items contain an `emails` array, the response also includes a
 |---|---|
 | `clean` | Mark lead as verified — safe to contact |
 | `catchall` | Mark as "unverified" — may be valid, proceed with caution |
+| `role_based` | Flag as non-personal (e.g. info@, support@) — use with caution |
 | `invalid` | Suppress from outreach — update lead status to "Bad Email" |
 | `disposable` | Flag as suspicious — review manually or suppress |
 

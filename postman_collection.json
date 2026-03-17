@@ -66,34 +66,21 @@
       "name": "Admin — API Key Management",
       "item": [
         {
-          "name": "List API Keys",
+          "name": "GET /api/keys — List API Keys (token-auth)",
           "request": {
             "method": "GET",
             "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
-            "url": "{{base_url}}/admin/api/keys"
+            "url": "{{base_url}}/api/keys",
+            "description": "Lists all API keys. Uses X-Admin-Token header auth. NOTE: /admin/api/keys requires an active admin browser session (cookie), not the token — use this /api/keys endpoint instead."
           }
         },
         {
-          "name": "Create API Key",
+          "name": "Create / Revoke API Keys — Admin UI only",
           "request": {
-            "method": "POST",
-            "header": [
-              { "key": "X-Admin-Token", "value": "{{admin_token}}" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Switchbox Production\",\n  \"rate_limit\": 1000\n}"
-            },
-            "url": "{{base_url}}/admin/api/keys"
-          }
-        },
-        {
-          "name": "Revoke API Key",
-          "request": {
-            "method": "DELETE",
-            "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
-            "url": "{{base_url}}/admin/api/keys/KEY_ID_HERE"
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/admin/api-keys",
+            "description": "Key creation and revocation require an admin browser session. Log in at /admin/login first, then manage keys at /admin/api-keys. There is no token-based create/revoke endpoint — those routes use session cookie authentication only."
           }
         }
       ]
@@ -146,7 +133,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"settings\": {\n    \"auto_validate\": false,\n    \"enable_smtp\": true,\n    \"enable_catchall\": true,\n    \"include_catchall_in_clean\": false,\n    \"include_role_based_in_clean\": false,\n    \"callback_url\": \"https://your-switchbox-callback.com/webhook\",\n    \"callback_signature_secret\": \"your-shared-hmac-secret\"\n  },\n  \"premium_features\": {\n    \"smtp_verification\": true,\n    \"catchall_detection\": true,\n    \"s3_delivery\": false\n  }\n}"
+              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"settings\": {\n    \"enable_smtp\": true,\n    \"enable_catchall\": true,\n    \"include_catchall_in_clean\": false,\n    \"include_role_based_in_clean\": false,\n    \"callback_url\": \"https://your-switchbox-callback.com/webhook\",\n    \"callback_signature_secret\": \"your-shared-hmac-secret\"\n  },\n  \"premium_features\": {\n    \"auto_validate\": true,\n    \"smtp_verification\": true,\n    \"catchall_detection\": true,\n    \"s3_delivery\": false\n  }\n}"
             },
             "url": "{{base_url}}/api/crm/config"
           }
@@ -229,6 +216,33 @@
               "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"validation_mode\": \"manual\",\n  \"emails\": [\"test@example.com\"],\n  \"crm_context\": [\n    { \"record_id\": \"rec_manual_1\", \"email\": \"test@example.com\", \"name\": \"Test\" }\n  ]\n}"
             },
             "url": "{{base_url}}/api/crm/leads/upload"
+          }
+        },
+        {
+          "name": "POST /api/crm/leads/upload — Multi-email per record (new format)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var json = pm.response.json();",
+                  "if (json.upload_id) { pm.collectionVariables.set('upload_id', json.upload_id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crm_id\": \"{{crm_id}}\",\n  \"crm_vendor\": \"switchbox\",\n  \"validation_mode\": \"auto\",\n  \"crm_context\": [\n    { \"record_id\": \"rec_001\", \"name\": \"Alice Smith\", \"emails\": [\"alice@acme.com\", \"alice@gmail.com\"] },\n    { \"record_id\": \"rec_002\", \"name\": \"Bob Jones\", \"emails\": [\"bob@work.com\", \"bob@personal.net\", \"old.bob@defunct.xyz\"] }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/crm/leads/upload",
+            "description": "Multi-email format: pass an 'emails' array inside each crm_context item. No top-level 'emails' key needed — the API derives it automatically. Results will include a 'records_by_id' object keyed by record_id with best_email, has_clean, all_invalid, email_count, and email_results fields."
           }
         },
         {
@@ -370,7 +384,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"emails\": [\"alice@example.com\", \"bob@example.com\"],\n  \"results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true },\n    { \"email\": \"bob@example.com\", \"valid\": false }\n  ]\n}"
+              "raw": "{\n  \"validation_results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true, \"checks\": {}, \"errors\": [] },\n    { \"email\": \"bob@example.com\", \"valid\": false, \"checks\": {}, \"errors\": [\"domain_not_found\"] }\n  ]\n}"
             },
             "url": "{{base_url}}/api/export/csv"
           }
@@ -385,7 +399,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"emails\": [\"alice@example.com\"],\n  \"results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true }\n  ]\n}"
+              "raw": "{\n  \"validation_results\": [\n    { \"email\": \"alice@example.com\", \"valid\": true, \"checks\": {}, \"errors\": [] }\n  ]\n}"
             },
             "url": "{{base_url}}/api/export/excel"
           }
