@@ -117,6 +117,19 @@ Body: { "name": "Switchbox Staging", "rate_limit_per_minute": 500 }
 | `GET` | `/tracker/stats` | API Key | Email validation stats |
 | `GET` | `/tracker/export` | API Key | Export tracked email history |
 
+### Self-Service Key Management
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/keys/self` | API Key | Inspect your own key's rate limit, usage totals, and status |
+| `PATCH` | `/api/keys/self/rate-limit` | API Key | Adjust your own rate limit — no admin token required |
+
+### KPI Summary (optional)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/integrations/kpi-summary` | API Key | Pollable KPI summary for external dashboards; supports `?range=7d` and `?limit=20` |
+
 ---
 
 ## Error Responses
@@ -131,6 +144,7 @@ All errors return JSON:
 |---|---|
 | `400` | Bad request / missing fields |
 | `401` | Missing or invalid API key |
+| `403` | Forbidden — e.g. `premium_features.auto_validate` not enabled for your CRM config |
 | `404` | Resource not found |
 | `409` | Conflict (e.g. CRM config already exists) |
 | `429` | Rate limit exceeded — includes `Retry-After: <seconds>` response header |
