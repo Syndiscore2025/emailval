@@ -76,6 +76,107 @@ def segregate_validation_results(
     return segregated
 
 
+# ---------------------------------------------------------------------------
+# Private helpers for multi-email support
+# ---------------------------------------------------------------------------
+
+def _build_email_to_record(crm_context: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Build a mapping of normalised email address → crm_context record.
+
+    Handles both the legacy single-email field (``email``) and the new
+    multi-email field (``emails``), so callers can pass either format.
+    """
+    mapping: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(crm_context, list):
+        return mapping
+    for record in crm_context:
+        if not isinstance(record, dict):
+            continue
+        # Multi-email field (new format)
+        if isinstance(record.get('emails'), list):
+            for em in record['emails']:
+                if em and isinstance(em, str):
+                    mapping[em.strip().lower()] = record
+        # Single-email field (legacy format)
+        elif record.get('email') and isinstance(record['email'], str):
+            mapping[record['email'].strip().lower()] = record
+    return mapping
+
+
+def _get_verdict(enriched_result: Dict[str, Any]) -> str:
+    """Return the bucket name (verdict) for an already-enriched result dict."""
+    if enriched_result.get('status') == 'invalid':
+        return 'invalid'
+    checks = enriched_result.get('checks', {})
+    if checks.get('type', {}).get('is_disposable'):
+        return 'disposable'
+    if enriched_result.get('is_catchall'):
+        return 'catchall'
+    if checks.get('type', {}).get('is_role_based'):
+        return 'role_based'
+    return 'clean'
+
+
+def _pick_best_email(email_results: List[Dict[str, Any]]) -> Optional[str]:
+    """Return the highest-quality email from a record's email_results list.
+
+    Priority: clean > catchall > role_based > disposable > invalid.
+    """
+    priority = ['clean', 'catchall', 'role_based', 'disposable', 'invalid']
+    for verdict in priority:
+        for er in email_results:
+            if er.get('verdict') == verdict:
+                return er.get('email')
+    return None
+
+
+def _build_records_by_id(
+    enriched_results: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Group enriched email-level results by their CRM record_id.
+
+    Returns a dict keyed by record_id.  Each value contains:
+    - record_id
+    - crm_metadata  (non-id, non-email fields from the crm_context record)
+    - email_results (list of per-email verdict summaries)
+    - best_email    (highest-quality email for this record)
+    - has_clean     (True if at least one email is clean)
+    - all_invalid   (True if every email is invalid)
+    - email_count
+    """
+    records_by_id: Dict[str, Dict[str, Any]] = {}
+
+    for result in enriched_results:
+        rec_id = result.get('crm_record_id')
+        if not rec_id:
+            continue
+
+        if rec_id not in records_by_id:
+            records_by_id[rec_id] = {
+                'record_id': rec_id,
+                'crm_metadata': result.get('crm_metadata', {}),
+                'email_results': [],
+            }
+
+        verdict = _get_verdict(result)
+        records_by_id[rec_id]['email_results'].append({
+            'email': result.get('email'),
+            'verdict': verdict,
+            'status': result.get('status'),
+            'is_catchall': result.get('is_catchall', False),
+        })
+
+    # Compute per-record summary fields
+    for rec in records_by_id.values():
+        verdicts = [e['verdict'] for e in rec['email_results']]
+        rec['best_email'] = _pick_best_email(rec['email_results'])
+        rec['has_clean'] = 'clean' in verdicts
+        rec['all_invalid'] = all(v == 'invalid' for v in verdicts)
+        rec['email_count'] = len(rec['email_results'])
+
+    return records_by_id
+
+
 def parse_crm_request(data: Dict[str, Any]) -> Dict[str, Any]:
     """Parse incoming CRM webhook request and extract metadata.
 
@@ -93,11 +194,15 @@ def parse_crm_request(data: Dict[str, Any]) -> Dict[str, Any]:
     crm_vendor = data.get('crm_vendor', 'other')
     crm_context = data.get('crm_context', [])
 
-    # Extract emails from crm_context if present
+    # Extract emails from crm_context (handles both 'email' and 'emails' fields)
     emails = []
     if isinstance(crm_context, list):
         for record in crm_context:
-            if isinstance(record, dict) and 'email' in record:
+            if not isinstance(record, dict):
+                continue
+            if isinstance(record.get('emails'), list):
+                emails.extend([e for e in record['emails'] if e])
+            elif record.get('email'):
                 emails.append(record['email'])
 
     return {
@@ -129,12 +234,8 @@ def build_crm_response(
     Returns:
         Standardized CRM response with record mapping
     """
-    # Build email -> crm_record mapping
-    email_to_record = {}
-    if isinstance(crm_context, list):
-        for record in crm_context:
-            if isinstance(record, dict) and 'email' in record:
-                email_to_record[record['email'].strip().lower()] = record
+    # Build email -> crm_record mapping (handles single 'email' and multi 'emails')
+    email_to_record = _build_email_to_record(crm_context)
 
     # Enrich validation results with CRM metadata
     records = []
@@ -165,7 +266,7 @@ def build_crm_response(
             enriched['crm_record_id'] = crm_record.get('record_id') or crm_record.get('id')
             enriched['crm_metadata'] = {
                 k: v for k, v in crm_record.items()
-                if k not in ['email', 'record_id', 'id']
+                if k not in ['email', 'emails', 'record_id', 'id']
             }
 
         records.append(enriched)
@@ -264,12 +365,8 @@ def build_segregated_crm_response(
     Returns:
         Segregated CRM response
     """
-    # Build email -> crm_record mapping
-    email_to_record = {}
-    if isinstance(crm_context, list):
-        for record in crm_context:
-            if isinstance(record, dict) and 'email' in record:
-                email_to_record[record['email'].strip().lower()] = record
+    # Build email -> crm_record mapping (handles single 'email' and multi 'emails')
+    email_to_record = _build_email_to_record(crm_context)
 
     # Enrich validation results with CRM metadata
     enriched_results = []
@@ -300,7 +397,7 @@ def build_segregated_crm_response(
             enriched['crm_record_id'] = crm_record.get('record_id') or crm_record.get('id')
             enriched['crm_metadata'] = {
                 k: v for k, v in crm_record.items()
-                if k not in ['email', 'record_id', 'id']
+                if k not in ['email', 'emails', 'record_id', 'id']
             }
 
         enriched_results.append(enriched)
@@ -312,6 +409,9 @@ def build_segregated_crm_response(
         include_role_based_in_clean
     )
 
+    # Group results by CRM record_id (populated when crm_context is provided)
+    records_by_id = _build_records_by_id(enriched_results)
+
     # Build summary
     summary = {
         'total': len(enriched_results),
@@ -321,6 +421,7 @@ def build_segregated_crm_response(
         'disposable': len(segregated['disposable']),
         'role_based': len(segregated['role_based']),
         'valid': sum(1 for r in enriched_results if r['status'] == 'valid'),
+        'record_count': len(records_by_id),
     }
 
     response = {
@@ -332,6 +433,10 @@ def build_segregated_crm_response(
         'lists': segregated,
         'timestamp': datetime.now().isoformat()
     }
+
+    # Include records_by_id only when there is CRM context to group by
+    if records_by_id:
+        response['records_by_id'] = records_by_id
 
     if upload_id:
         response['upload_id'] = upload_id

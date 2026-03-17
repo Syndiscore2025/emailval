@@ -3286,15 +3286,28 @@ def crm_upload_leads():
         crm_id = data.get('crm_id')
         crm_vendor = data.get('crm_vendor', 'other')
         validation_mode = data.get('validation_mode', 'manual')
-        emails = data.get('emails', [])
+        emails = list(data.get('emails', []))
         crm_context = data.get('crm_context', [])
+
+        # Auto-derive emails from crm_context when not supplied explicitly.
+        # Supports both the legacy single-email field and the new multi-email field:
+        #   Legacy:  {"record_id": "001", "email": "a@x.com"}
+        #   Multi:   {"record_id": "001", "emails": ["a@x.com", "b@x.com"]}
+        if not emails and isinstance(crm_context, list):
+            for record in crm_context:
+                if not isinstance(record, dict):
+                    continue
+                if isinstance(record.get('emails'), list):
+                    emails.extend([str(e).strip().lower() for e in record['emails'] if e])
+                elif record.get('email'):
+                    emails.append(str(record['email']).strip().lower())
 
         # Validate inputs
         if not crm_id:
             return jsonify({"error": "crm_id is required"}), 400
 
         if not emails:
-            return jsonify({"error": "emails array is required"}), 400
+            return jsonify({"error": "emails array is required (or supply crm_context with email/emails fields)"}), 400
 
         if validation_mode not in ['manual', 'auto']:
             return jsonify({"error": "validation_mode must be 'manual' or 'auto'"}), 400
